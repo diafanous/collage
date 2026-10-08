@@ -44,12 +44,13 @@ input[type=color]::-moz-color-swatch{border:0}
 
 .sl{display:grid;grid-template-columns:1fr auto;row-gap:5px;margin-bottom:14px}
 .sl span{color:var(--dim)}
-.sl input{grid-column:1/-1;appearance:none;-webkit-appearance:none;height:14px;border:0;padding:0;background:transparent;cursor:pointer;--p:0%}
-.sl input::-webkit-slider-runnable-track{height:2px;background:linear-gradient(to right,var(--fg) var(--p),var(--line) var(--p))}
-.sl input::-webkit-slider-thumb{-webkit-appearance:none;width:10px;height:10px;margin-top:-4px;border-radius:50%;border:0;background:var(--fg)}
-.sl input::-moz-range-track{height:2px;background:var(--line)}
-.sl input::-moz-range-progress{height:2px;background:var(--fg)}
-.sl input::-moz-range-thumb{width:10px;height:10px;border:0;border-radius:50%;background:var(--fg)}
+.sl .val{width:64px;text-align:right}
+.sl input[type=range]{grid-column:1/-1;appearance:none;-webkit-appearance:none;height:14px;border:0;padding:0;background:transparent;cursor:pointer;--p:0%}
+.sl input[type=range]::-webkit-slider-runnable-track{height:2px;background:linear-gradient(to right,var(--fg) var(--p),var(--line) var(--p))}
+.sl input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:10px;height:10px;margin-top:-4px;border-radius:50%;border:0;background:var(--fg)}
+.sl input[type=range]::-moz-range-track{height:2px;background:var(--line)}
+.sl input[type=range]::-moz-range-progress{height:2px;background:var(--fg)}
+.sl input[type=range]::-moz-range-thumb{width:10px;height:10px;border:0;border-radius:50%;background:var(--fg)}
 
 .row{display:flex;align-items:center;gap:8px;margin-bottom:14px}
 .row .grow{flex:1}
@@ -88,7 +89,9 @@ input[type=color]::-moz-color-swatch{border:0}
     <div class="row"><button id="add">+ add image / pdf</button></div>
     <input id="pick" type="file" multiple accept="image/*,.pdf,application/pdf" hidden>
   </section>
-  <section><h2>cut <em id="cutinfo"></em></h2><div id="sl-cut"></div></section>
+  <section><h2>cut <em id="cutinfo"></em></h2><div id="sl-cut"></div>
+    <div class="row"><span class="grow">section size</span><input id="cwv" type="number" step="any" aria-label="section width"><span>×</span><input id="chv" type="number" step="any" aria-label="section height"><span id="cu"></span></div>
+  </section>
   <section><h2>collage</h2><div id="sl-collage"></div></section>
   <section>
     <h2>layers</h2><div id="sl-layers"></div>
@@ -113,7 +116,7 @@ const SL = {
             ['rot', 'rotation', 0, 180, 1, 12, v => v + '°'], ['scatter', 'scatter', 0, 1, .01, .35, pc], ['density', 'density', .1, 1, .01, 1, pc]],
   layers: [['layers', 'layers', 1, 8, 1, 2, v => v], ['opacity', 'opacity', .05, 1, .01, 1, pc]],
 };
-const P = {}, st = {files: [], w: 0, h: 0, touched: false, dpi: 300, fmt: 'png', bg: '#f4f2ee', unit: 'in', seed: 1};
+const P = {}, SLIDER = {}, st = {files: [], w: 0, h: 0, touched: false, dpi: 300, fmt: 'png', bg: '#f4f2ee', unit: 'in', seed: 1};
 const show = v => +(v * UN[st.unit]).toFixed(st.unit === 'mm' ? 1 : 2);
 const toIn = v => v / UN[st.unit];
 
@@ -122,20 +125,39 @@ function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('o
 
 // ---- sliders
 for (const [sec, list] of Object.entries(SL)) for (const [k, label, min, max, step, def, f] of list) {
-  const l = document.createElement('label');
-  l.className = 'sl'; l.title = 'double-click to reset';
-  l.innerHTML = `<span>${label}</span><output></output><input type="range" min="${min}" max="${max}" step="${step}" value="${def}">`;
-  const r = l.querySelector('input'), o = l.querySelector('output');
-  const set = () => { o.textContent = f(+r.value); r.style.setProperty('--p', (r.value - min) / (max - min) * 100 + '%'); P[k] = +r.value; };
+  const l = document.createElement('div');
+  l.className = 'sl'; l.title = 'double-click to reset; click the value to type one';
+  l.innerHTML = `<span>${label}</span><input class="val" aria-label="${label} value"><input type="range" aria-label="${label}" min="${min}" max="${max}" step="${step}" value="${def}">`;
+  const r = l.querySelector('[type=range]'), o = l.querySelector('.val');
+  const set = () => { o.value = f(+r.value); r.style.setProperty('--p', (r.value - min) / (max - min) * 100 + '%'); P[k] = +r.value; };
   r.oninput = () => { set(); info(); draw(true); };
   r.onchange = () => draw(false);
   l.ondblclick = () => { r.value = def; set(); info(); draw(false); };
+  o.onfocus = () => o.select();
+  o.onchange = () => {   // typed value: percent fields take 25 for 25%, out-of-range values are clamped
+    let v = parseFloat(o.value.replace(',', '.'));
+    if (!isNaN(v)) { r.value = Math.min(max, Math.max(min, f === pc ? v / 100 : v)); P[k] = +r.value; }
+    set(); info(); draw(false);
+  };
+  SLIDER[k] = {r, set};
   set(); $('#sl-' + sec).append(l);
 }
 
-function info() {
+// typed physical section size (in the chosen unit) -> the cut slider that produces it
+for (const [id, k, side] of [['#cwv', 'cw', f => f.w], ['#chv', 'ch', f => f.w * f.aspect]]) {
+  $(id).oninput = () => {
+    const f = st.files[0], v = toIn(+$(id).value);
+    if (!f || !(v > 0)) return;
+    SLIDER[k].r.value = Math.min(1, Math.max(.05, v / side(f)));
+    SLIDER[k].set(); info(id); draw(false);
+  };
+}
+
+function info(keep) {   // keep: id of the field being typed in, so it isn't rewritten under the cursor
   const f = st.files[0], c = Math.max(1, Math.round(1 / P.cw)), r = Math.max(1, Math.round(1 / P.ch));
-  $('#cutinfo').textContent = `${c}×${r}` + (f ? ` · ${show(f.w / c)}×${show(f.w * f.aspect / r)} ${st.unit}` : '');
+  $('#cutinfo').textContent = `${c}×${r}`; $('#cu').textContent = st.unit;
+  if (keep !== '#cwv') $('#cwv').value = f ? show(f.w / c) : '';
+  if (keep !== '#chv') $('#chv').value = f ? show(f.w * f.aspect / r) : '';
 }
 
 // ---- sources
