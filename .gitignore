@@ -1,0 +1,4 @@
+__pycache__/
+.venv/
+# linked folder shared across projects (Paper Mono, OFL). The app falls back to a system monospace without it.
+fonts/

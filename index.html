@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>collage</title>
+<style>
+@font-face{font-family:"Paper Mono";font-weight:400;src:url(/font/Regular.woff2) format("woff2")}
+@font-face{font-family:"Paper Mono";font-weight:500;src:url(/font/Medium.woff2) format("woff2")}
+:root{--bg:#0c0c0d;--panel:#101012;--stage:#09090a;--line:#242428;--fg:#ececea;--dim:#86868c}
+@media (prefers-color-scheme:light){:root{--bg:#f4f3ef;--panel:#faf9f6;--stage:#e9e8e3;--line:#dedcd5;--fg:#18181b;--dim:#7a7a80}}
+*{box-sizing:border-box;margin:0}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{background:var(--bg);color:var(--fg);font:12px/1.5 "Paper Mono",ui-monospace,Consolas,monospace;display:grid;grid-template-columns:1fr 340px;overflow:hidden}
+body.drag #stage{outline:1px dashed var(--fg);outline-offset:-14px}
+
+#stage{position:relative;display:grid;place-items:center;background:var(--stage);min-width:0;min-height:0;overflow:hidden}
+#view{box-shadow:0 0 0 1px var(--line),0 30px 80px -30px #000a}
+#empty{text-align:center;color:var(--dim);line-height:2}
+#toast{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:6px 12px;opacity:0;pointer-events:none;transition:opacity .2s;max-width:80%}
+#toast.on{opacity:1}
+
+aside{background:var(--panel);border-left:1px solid var(--line);overflow:auto;padding:0 22px 24px}
+header{display:flex;align-items:center;gap:12px;height:52px;font-weight:500}
+header #ms{margin-left:auto;color:var(--dim);font-weight:400}
+section{border-top:1px solid var(--line);padding:16px 0 6px}
+h2{font:inherit;color:var(--dim);display:flex;justify-content:space-between;margin-bottom:12px}
+h2 em{font-style:normal}
+
+button{all:unset;cursor:pointer;color:var(--dim)}
+button:hover:not(:disabled){color:var(--fg)}
+:focus-visible{outline:1px solid var(--fg);outline-offset:2px}
+input,select{background:transparent;color:inherit;font:inherit;border:0;border-bottom:1px solid var(--line);border-radius:0;padding:1px 0;outline:0;min-width:0}
+input:focus,select:focus{border-color:var(--fg)}
+select{padding-right:2px;cursor:pointer}
+select option{background:var(--panel)}
+input[type=number]{width:62px;text-align:right;appearance:textfield;-moz-appearance:textfield}
+input[type=number]::-webkit-inner-spin-button{display:none}
+input[type=color]{width:18px;height:18px;padding:0;border:1px solid var(--dim);cursor:pointer;appearance:none;-webkit-appearance:none}
+input[type=color]::-webkit-color-swatch-wrapper{padding:0}
+input[type=color]::-webkit-color-swatch{border:0}
+input[type=color]::-moz-color-swatch{border:0}
+
+.sl{display:grid;grid-template-columns:1fr auto;row-gap:5px;margin-bottom:14px}
+.sl span{color:var(--dim)}
+.sl input{grid-column:1/-1;appearance:none;-webkit-appearance:none;height:14px;border:0;padding:0;background:transparent;cursor:pointer;--p:0%}
+.sl input::-webkit-slider-runnable-track{height:2px;background:linear-gradient(to right,var(--fg) var(--p),var(--line) var(--p))}
+.sl input::-webkit-slider-thumb{-webkit-appearance:none;width:10px;height:10px;margin-top:-4px;border-radius:50%;border:0;background:var(--fg)}
+.sl input::-moz-range-track{height:2px;background:var(--line)}
+.sl input::-moz-range-progress{height:2px;background:var(--fg)}
+.sl input::-moz-range-thumb{width:10px;height:10px;border:0;border-radius:50%;background:var(--fg)}
+
+.row{display:flex;align-items:center;gap:8px;margin-bottom:14px}
+.row .grow{flex:1}
+.row > span{color:var(--dim)}
+.file{margin-bottom:14px}
+.file .nm{display:flex;justify-content:space-between;gap:8px}
+.file .nm span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file .row{margin:4px 0 0}
+.file input[type=number]{width:56px;text-align:left}
+.file .tag{color:var(--dim);margin-top:2px}
+.file .tag.warn{color:var(--fg)}
+.file .tag.warn::before{content:"! "}
+.seg{display:flex;gap:14px}
+.seg button.on{color:var(--fg);box-shadow:0 1px 0 var(--fg)}
+#go{display:block;text-align:center;border:1px solid var(--fg);color:var(--fg);padding:9px 0;margin:6px 0 12px}
+#go:hover:not(:disabled){background:var(--fg);color:var(--bg)}
+#go:disabled{opacity:.4;cursor:progress}
+#px{color:var(--dim);margin-bottom:14px}
+#px.warn{color:var(--fg)}
+@media (max-width:760px){body{grid-template-columns:1fr;grid-template-rows:55vh 1fr}aside{border-left:0;border-top:1px solid var(--line)}}
+</style>
+</head>
+<body>
+<main id="stage">
+  <img id="view" alt="collage preview" hidden>
+  <div id="empty">drop images or pdfs<br><button id="open">or choose files</button></div>
+  <div id="toast" role="status"></div>
+</main>
+<aside>
+  <header>collage <span id="ms"></span>
+    <select id="unit" aria-label="units"><option>in</option><option>cm</option><option>mm</option></select>
+  </header>
+  <section>
+    <h2>source</h2>
+    <div id="files"></div>
+    <div class="row"><button id="add">+ add image / pdf</button></div>
+    <input id="pick" type="file" multiple accept="image/*,.pdf,application/pdf" hidden>
+  </section>
+  <section><h2>cut <em id="cutinfo"></em></h2><div id="sl-cut"></div></section>
+  <section><h2>collage</h2><div id="sl-collage"></div></section>
+  <section>
+    <h2>layers</h2><div id="sl-layers"></div>
+    <div class="row"><span>seed</span><button id="seed">↻ <span id="seedn"></span></button><span class="grow"></span><span>paper</span><input id="bg" type="color" aria-label="background colour"></div>
+  </section>
+  <section>
+    <h2>output</h2>
+    <div class="row"><span class="grow">size</span><input id="ow" type="number" step="any" aria-label="output width"><span>×</span><input id="oh" type="number" step="any" aria-label="output height"><span id="ou"></span></div>
+    <div class="row"><span class="grow">dpi</span><input id="dpi" type="number" min="10" max="1200" list="dpis" aria-label="dpi"><datalist id="dpis"><option>72<option>150<option>300<option>600<option>1200</datalist></div>
+    <div class="row"><span class="grow">file</span><div class="seg" id="fmt"><button data-f="png" class="on">png</button><button data-f="tif">tif</button><button data-f="pdf">pdf</button></div></div>
+    <div id="px"></div>
+    <button id="go"></button>
+  </section>
+</aside>
+<script>
+const $ = s => document.querySelector(s), UN = {in: 1, cm: 2.54, mm: 25.4};
+const pc = v => Math.round(v * 100) + '%';
+// [key, label, min, max, step, default, format]
+const SL = {
+  cut: [['cw', 'width', .05, 1, .01, .25, pc], ['ch', 'height', .05, 1, .01, .25, pc]],
+  collage: [['scale', 'scale', .1, 4, .01, 1, v => v.toFixed(2) + '×'], ['var', 'size variance', 0, .9, .01, .25, pc],
+            ['rot', 'rotation', 0, 180, 1, 12, v => v + '°'], ['scatter', 'scatter', 0, 1, .01, .35, pc], ['density', 'density', .1, 1, .01, 1, pc]],
+  layers: [['layers', 'layers', 1, 8, 1, 2, v => v], ['opacity', 'opacity', .05, 1, .01, 1, pc]],
+};
+const P = {}, st = {files: [], w: 0, h: 0, touched: false, dpi: 300, fmt: 'png', bg: '#f4f2ee', unit: 'in', seed: 1};
+const show = v => +(v * UN[st.unit]).toFixed(st.unit === 'mm' ? 1 : 2);
+const toIn = v => v / UN[st.unit];
+
+let tt;
+function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('on'); clearTimeout(tt); tt = setTimeout(() => t.classList.remove('on'), 5000); }
+
+// ---- sliders
+for (const [sec, list] of Object.entries(SL)) for (const [k, label, min, max, step, def, f] of list) {
+  const l = document.createElement('label');
+  l.className = 'sl'; l.title = 'double-click to reset';
+  l.innerHTML = `<span>${label}</span><output></output><input type="range" min="${min}" max="${max}" step="${step}" value="${def}">`;
+  const r = l.querySelector('input'), o = l.querySelector('output');
+  const set = () => { o.textContent = f(+r.value); r.style.setProperty('--p', (r.value - min) / (max - min) * 100 + '%'); P[k] = +r.value; };
+  r.oninput = () => { set(); info(); draw(true); };
+  r.onchange = () => draw(false);
+  l.ondblclick = () => { r.value = def; set(); info(); draw(false); };
+  set(); $('#sl-' + sec).append(l);
+}
+
+function info() {
+  const f = st.files[0], c = Math.max(1, Math.round(1 / P.cw)), r = Math.max(1, Math.round(1 / P.ch));
+  $('#cutinfo').textContent = `${c}×${r}` + (f ? ` · ${show(f.w / c)}×${show(f.w * f.aspect / r)} ${st.unit}` : '');
+}
+
+// ---- sources
+const esc = s => s.replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+function files() {
+  $('#files').replaceChildren();
+  st.files.forEach((f, i) => {
+    const d = document.createElement('div');
+    d.className = 'file';
+    d.innerHTML = `<div class="nm"><span title="${esc(f.name)}">${esc(f.name)}</span><button title="remove">×</button></div>
+      <div class="row"><input type="number" step="any" min="0.1" aria-label="source width" value="${show(f.w)}"><span>× <b class="h">${show(f.w * f.aspect)}</b> ${st.unit}</span>
+      ${f.pdf ? `<span class="grow"></span><span>page</span><input type="number" min="1" max="${f.pages}" value="${f.page}" aria-label="page"><span>/ ${f.pages}</span>` : ''}</div>
+      <div class="tag ${f.assumed && !f.edited ? 'warn' : ''}">${f.edited ? 'size set by you' : f.assumed ? 'no dpi in file, assumed 300 dpi' : f.pdf ? 'size from pdf' : 'size from file'}</div>`;
+    const [w, pg] = d.querySelectorAll('input');
+    w.oninput = () => { if (!(+w.value > 0)) return; f.w = toIn(+w.value); f.edited = true; d.querySelector('.h').textContent = show(f.w * f.aspect); d.querySelector('.tag').textContent = 'size set by you'; d.querySelector('.tag').className = 'tag'; syncOut(); info(); draw(false); };
+    if (pg) pg.oninput = () => { f.page = Math.min(Math.max(+pg.value | 0, 1), f.pages); draw(false); };
+    d.querySelector('button').onclick = () => { fetch('/source/' + f.id, {method: 'DELETE'}); st.files.splice(i, 1); after(); };
+    $('#files').append(d);
+  });
+}
+
+async function add(list) {
+  for (const f of list) {
+    const r = await fetch('/source', {method: 'POST', headers: {'X-Name': encodeURIComponent(f.name)}, body: f});
+    const j = await r.json();
+    if (r.ok) st.files.push({...j, page: 1, edited: false}); else toast(j.error);
+  }
+  after();
+}
+function after() {
+  $('#empty').hidden = st.files.length > 0; $('#view').hidden = !st.files.length;
+  syncOut(); files(); info(); draw(false);
+}
+$('#add').onclick = $('#open').onclick = () => $('#pick').click();
+$('#pick').onchange = e => { add([...e.target.files]); e.target.value = ''; };
+addEventListener('dragover', e => { e.preventDefault(); document.body.classList.add('drag'); });
+addEventListener('dragleave', e => { if (!e.relatedTarget) document.body.classList.remove('drag'); });
+addEventListener('drop', e => { e.preventDefault(); document.body.classList.remove('drag'); add([...e.dataTransfer.files]); });
+
+// ---- output
+function syncOut() {
+  const f = st.files[0];
+  if (f && !st.touched) { st.w = f.w; st.h = f.w * f.aspect; }
+  outUI();
+}
+function outUI() {
+  $('#ow').value = st.w ? show(st.w) : ''; $('#oh').value = st.h ? show(st.h) : ''; $('#ou').textContent = st.unit;
+  const w = Math.round(st.w * st.dpi), h = Math.round(st.h * st.dpi), big = w * h > 4e8;
+  $('#px').textContent = st.w ? `${w} × ${h} px · ${(w * h / 1e6).toFixed(1)} MP${big ? ' · over the 400 MP limit' : ''}` : '';
+  $('#px').classList.toggle('warn', big);
+  $('#go').textContent = 'export ' + st.fmt;
+}
+$('#ow').oninput = () => { if (+$('#ow').value > 0) { st.w = toIn(+$('#ow').value); st.touched = true; outUI(); draw(false); } };
+$('#oh').oninput = () => { if (+$('#oh').value > 0) { st.h = toIn(+$('#oh').value); st.touched = true; outUI(); draw(false); } };
+$('#dpi').oninput = () => { if (+$('#dpi').value > 0) { st.dpi = +$('#dpi').value; outUI(); } };
+$('#fmt').onclick = e => { const f = e.target.dataset.f; if (!f) return; st.fmt = f; document.querySelectorAll('#fmt button').forEach(b => b.classList.toggle('on', b === e.target)); outUI(); };
+$('#unit').onchange = e => { st.unit = e.target.value; files(); info(); outUI(); };
+$('#seed').onclick = () => { st.seed = Math.floor(Math.random() * 10000); $('#seedn').textContent = st.seed; draw(false); };
+$('#bg').oninput = e => { st.bg = e.target.value; draw(true); };
+$('#bg').onchange = () => draw(false);
+$('#bg').value = st.bg; $('#dpi').value = st.dpi; $('#seedn').textContent = st.seed;
+
+// ---- render: one request in flight; sliders drag at half resolution, then sharpen on release
+const body = () => JSON.stringify({p: {...P, seed: st.seed, bg: st.bg, w: st.w, h: st.h, dpi: st.dpi, pv: st.pv},
+  sources: st.files.map(f => ({id: f.id, w: f.w, page: f.page - 1}))});
+let busy = false, again = null;
+async function draw(fast) {
+  if (!st.files.length) return;
+  if (busy) { again = again === false ? false : fast; return; }
+  busy = true;
+  try {
+    const k = Math.min(($('#stage').clientWidth - 72) / st.w, ($('#stage').clientHeight - 72) / st.h), v = $('#view');
+    v.style.width = st.w * k + 'px'; v.style.height = st.h * k + 'px';
+    st.pv = Math.round(Math.min(2400, Math.max(300, Math.max(st.w, st.h) * k * devicePixelRatio * (fast ? .5 : 1))));
+    const r = await fetch('/preview', {method: 'POST', body: body()});
+    if (r.ok) {
+      const old = v.src; v.src = URL.createObjectURL(await r.blob());
+      if (old.startsWith('blob:')) URL.revokeObjectURL(old);
+      $('#ms').textContent = r.headers.get('X-Ms') + ' ms';
+    } else toast((await r.json()).error);
+  } catch (e) { toast(String(e)); }
+  busy = false;
+  if (again !== null) { const f = again; again = null; draw(f); }
+}
+let rs; addEventListener('resize', () => { clearTimeout(rs); rs = setTimeout(() => draw(false), 120); });
+
+$('#go').onclick = async () => {
+  if (!st.files.length) return toast('add an image or pdf first');
+  const b = $('#go'); b.disabled = true; b.textContent = 'rendering…';
+  try {
+    const r = await fetch('/export/' + st.fmt, {method: 'POST', body: body()});
+    if (!r.ok) throw new Error((await r.json()).error);
+    const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = 'collage.' + st.fmt; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 6e4);
+  } catch (e) { toast(e.message); }
+  b.disabled = false; outUI();
+};
+info(); outUI();
+</script>
+</body>
+</html>
