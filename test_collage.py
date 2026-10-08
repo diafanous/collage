@@ -1,12 +1,16 @@
 """py test_collage.py  (also works under pytest)"""
 import io
 import json
+import pathlib
 import struct
+import tempfile
+import zipfile
 
 import pymupdf
 from PIL import Image, ImageChops
 
 import collage as C
+import server
 
 # neutral settings: sections go back exactly where they were cut
 FLAT = dict(cw=0.25, ch=0.25, scale=1, var=0, rot=0, scatter=0, density=1, layers=1, opacity=1, bg="#000000")
@@ -87,7 +91,7 @@ def test_layout_is_deterministic_and_stable():
     assert one == C.layout(p, sizes, 8, 6)
     assert C.layout({**p, "layers": 3}, sizes, 8, 6)[:len(one)] == one      # more layers only add on top
     moved = C.layout({**p, "scatter": 0.9}, sizes, 8, 6)
-    assert [x[-1] for x in moved] == [x[-1] for x in one]                    # scatter doesn't reshuffle angles
+    assert [x[6] for x in moved] == [x[6] for x in one]                    # scatter doesn't reshuffle angles
     assert moved != one
 
 
@@ -96,13 +100,13 @@ def test_exports_carry_size_and_dpi():
     raw = {**FLAT, "rot": 10, "scatter": 0.3, "w": 2, "h": 1.5, "dpi": 200}
     specs = [{"id": "0", "w": 2}]
 
-    out = Image.open(io.BytesIO(C.export(raw, specs, store, "png")))
+    out = Image.open(io.BytesIO(C.export(raw, specs, store, "png")[0]))
     assert out.size == (400, 300) and round(out.info["dpi"][0]) == 200
 
-    out = Image.open(io.BytesIO(C.export(raw, specs, store, "tif")))
+    out = Image.open(io.BytesIO(C.export(raw, specs, store, "tif")[0]))
     assert out.size == (400, 300) and round(out.info["dpi"][0]) == 200 and out.mode == "RGB"
 
-    doc = pymupdf.open(stream=C.export(raw, specs, store, "pdf"), filetype="pdf")
+    doc = pymupdf.open(stream=C.export(raw, specs, store, "pdf")[0], filetype="pdf")
     assert len(doc) == 1 and doc[0].rect == pymupdf.Rect(0, 0, 144, 108)    # 2 x 1.5 in
     img = doc[0].get_images(full=True)[0]
     assert doc.extract_image(img[0])["width"] == 400                        # full resolution, not downsampled
@@ -134,6 +138,154 @@ def test_output_size_limit_and_clamping():
         raise AssertionError("no limit")
     p = C.clean({"cw": -5, "layers": 99, "bg": "red; drop table"})
     assert (p["cw"], p["layers"], p["bg"]) == (0.05, 8, "#f4f2ee")
+
+
+def two_sections():
+    """A 4in x 3in white source on an 8 x 6 canvas."""
+    store = store_of(C.open_source("a", png(400, 300, dpi=100, color="white")[1]))
+    return store, [{"id": "0", "w": 4}], {**FLAT, "w": 8, "h": 6, "dpi": 50}
+
+
+def pieces(raw, size=(4, 3)):
+    p = C.clean(raw)
+    return C.layout(p, [size], p["w"], p["h"])
+
+
+def test_corners_turn_the_way_pillow_rotates():
+    tile = Image.new("RGBA", (100, 60), (255, 255, 255, 255))
+    tile.paste((0, 0, 0, 255), (0, 0, 10, 10))                       # black mark in the top-left corner
+    rot = tile.rotate(30, Image.BICUBIC, expand=True)
+    dark = [(x, y) for y in range(rot.height) for x in range(rot.width)
+            if rot.getpixel((x, y))[3] > 200 and rot.getpixel((x, y))[0] < 60]
+    mark = (sum(x for x, _ in dark) / len(dark) - rot.width / 2, sum(y for _, y in dark) / len(dark) - rot.height / 2)
+    tl = C.corners(0, 0, 100, 60, 30)[0]
+    assert abs(mark[0] - tl[0]) < 10 and abs(mark[1] - tl[1]) < 10, (mark, tl)   # mark sits at corner 0, not another
+
+
+def test_grid_pull_lands_sections_on_the_nodes():
+    raw = {**FLAT, "w": 8, "h": 6, "scatter": 0.7, "gs": 1, "gn": 4, "gi": 0}
+    on_node = lambda v, cell: abs((v / cell - 0.5) - round(v / cell - 0.5)) < 1e-9       # v = (i + .5) * cell
+    for pc in pieces(raw):
+        assert on_node(pc[2], 2) and on_node(pc[3], 2), pc                              # 8in / 4 cols, 6in / 3 rows
+    assert any(not on_node(pc[2], 2) for pc in pieces({**raw, "gi": 1}))               # irregular grid moves the nodes
+
+
+def test_drawn_strokes_pull_sections_toward_them():
+    line = [[0.9, y / 40] for y in range(41)]                                          # a vertical stroke at 90% across
+    raw = {**FLAT, "w": 8, "h": 6, "scatter": 0.8, "pts": line, "draw": 1}
+    assert all(abs(pc[2] - 7.2) < 1e-9 for pc in pieces(raw))
+    assert any(abs(pc[2] - 7.2) > 0.5 for pc in pieces({**raw, "draw": 0}))            # pull 0 leaves them alone
+
+
+def test_portions_cut_only_part_of_each_file():
+    raw = {**FLAT, "ps": 0.4, "pn": 2}
+    part, whole = pieces(raw), pieces({**FLAT, "ps": 1})
+    assert len(part) == 2 * 16 and len(whole) == 16
+    rects = C._portions(C.clean(raw), 0)
+    for pc in part:
+        u0, v0, u1, v1 = pc[1]
+        assert any(a - 1e-9 <= u0 and u1 <= c + 1e-9 and b - 1e-9 <= v0 and v1 <= d + 1e-9 for a, b, c, d in rects)
+    assert rects == C._portions(C.clean(raw), 0)                                       # stable for a seed
+
+
+def test_tone_lut():
+    assert C.tone_lut(C.clean({})) == C.IDENT
+    hi = C.tone_lut(C.clean({"con": 1}))
+    assert hi[64] < 64 and hi[192] > 192                                               # contrast spreads
+    lv = C.tone_lut(C.clean({"lb": 100, "lw": 200}))
+    assert lv[100] == 0 and lv[200] == 255 and abs(lv[150] - 127.5) < 1.5
+    assert C.tone_lut(C.clean({"lg": 2}))[64] > 64                                     # gamma > 1 lifts the mids
+    inv = list(range(255, -1, -1))
+    assert C.tone_lut(C.clean({"curve": inv}))[0] == 255                               # the curve is applied
+    assert C.clean({"curve": [1, 2, 3]})["curve"] == C.IDENT                           # wrong-length curve ignored
+    store = store_of(C.open_source("w", png(50, 50, 50, "white")[1]))
+    _, im = C.compose({**FLAT, "w": 1, "h": 1, "dpi": 50, "curve": inv}, [{"id": "0", "w": 1}], store, final=True)
+    assert im.getpixel((10, 10)) == (0, 0, 0)                                          # white source comes out black
+
+
+def test_edge_blur_fades_section_edges_only():
+    store, specs, raw = two_sections()
+    raw = {**raw, "cw": 1, "ch": 1, "bg": "#000000"}                                   # one section, the whole source
+    sharp = C.compose(raw, specs, store, final=True)[1]
+    soft = C.compose({**raw, "blur": 0.6}, specs, store, final=True)[1]
+    w, h = sharp.size
+    assert sharp.getpixel((w // 2, h // 2)) == (255, 255, 255) == soft.getpixel((w // 2, h // 2))   # centre untouched
+    edge = (w // 2 - 98, h // 2)                                                       # 2px inside the section's left edge
+    assert sharp.getpixel(edge) == (255, 255, 255) and soft.getpixel(edge)[0] < 60
+
+
+def test_migration_pdf_is_vector_with_four_layers():
+    store, specs, raw = two_sections()
+    raw = {**raw, "scatter": 0.8, "rot": 40, "m2c": "#ff0000", "m2o": 0.5, "mp": "#ffffff"}
+    doc = pymupdf.open(stream=C.migration_pdf(raw, specs, store), filetype="pdf")
+    assert doc[0].rect == pymupdf.Rect(0, 0, 8 * 72, 6 * 72)
+    assert sorted(o["name"] for o in doc.get_ocgs().values()) == ["1 initial", "2 migration", "3 final", "paper"]
+    assert doc[0].get_images() == []                                                   # pure vector
+    d = doc[0].get_drawings()
+    assert [x["layer"] for x in d] == ["paper", "1 initial", "2 migration", "2 migration", "3 final"]   # each in its own layer
+    assert d[2]["color"] == (1.0, 0.0, 0.0) and abs(d[2]["stroke_opacity"] - 0.5) < 1e-2               # tone + opacity honoured
+    assert len(d[1]["items"]) >= 16 and len(d[2]["items"]) == 16 * 5                               # 16 sections: 4 corner lines + 1 path each
+    im = Image.open(io.BytesIO(C.preview({**raw, "pv": 400}, specs, store, as_map=True)))
+    assert im.size[0] == 400                                                           # the stage can show it
+
+
+def test_each_map_layer_switches_off_on_its_own():
+    store, specs, raw = two_sections()
+    pdf = C.migration_pdf({**raw, "scatter": 0.8, "rot": 40, "mp": "#ffffff"}, specs, store)
+
+    def inked(hide):
+        doc = pymupdf.open(stream=pdf, filetype="pdf")
+        for ui in doc.layer_ui_configs():
+            if ui["text"] in hide:
+                doc.set_layer_ui_config(ui["number"], 2)                                # 2 = off
+        s = doc[0].get_pixmap(dpi=30, alpha=False).samples
+        return sum(1 for i in range(0, len(s), 3) if s[i:i + 3] != b"\xff\xff\xff")
+
+    base = inked(())
+    assert all(inked((n,)) < base for n in ("1 initial", "2 migration", "3 final"))
+    assert inked(("1 initial", "2 migration", "3 final")) == 0                          # only white paper left
+
+
+def test_portion_linework_and_zip():
+    store, specs, raw = two_sections()
+    raw = {**raw, "ps": 0.5, "pn": 3}
+    pdf = pymupdf.open(stream=C.portions_pdf(raw, specs, store), filetype="pdf")
+    assert len(pdf) == 1 and pdf[0].rect == pymupdf.Rect(0, 0, 4 * 72, 3 * 72)
+    assert sum(1 for d in pdf[0].get_drawings() if d.get("width") == 1.5) == 3         # one heavy outline per portion
+    data, name = C.export(raw, specs, store, "png", lines=True)
+    assert name == "collage.zip" and sorted(zipfile.ZipFile(io.BytesIO(data)).namelist()) == ["collage-portions.pdf", "collage.png"]
+    assert C.export(raw, specs, store, "map")[1] == "collage-map.pdf"
+    try:
+        C.export({**raw, "ps": 1}, specs, store, "png", lines=True)
+    except ValueError as e:
+        assert "portion" in str(e)
+    else:
+        raise AssertionError("linework without portions")
+
+
+def test_random_folder_pick():
+    with tempfile.TemporaryDirectory() as d:
+        for i in range(5):
+            (pathlib.Path(d) / f"{i}.png").write_bytes(png(20, 20, 50)[1])
+        (pathlib.Path(d) / "notes.txt").write_text("x")
+        (pathlib.Path(d) / "sub").mkdir()
+        got, total = server.pick_files(f'"{d}"', 3)                                    # quoted, as Explorer's Copy as path gives it
+        assert total == 5 and len(got) == 3 and len({f.name for f in got}) == 3 and all(f.suffix == ".png" for f in got)
+        assert len(server.pick_files(d, 99)[0]) == 5
+        assert len({frozenset(f.name for f in server.pick_files(d, 2)[0]) for _ in range(30)}) > 1   # genuinely random
+        for bad in (d + "-missing", d + "/notes.txt"):
+            try:
+                server.pick_files(bad, 1)
+            except ValueError:
+                continue
+            raise AssertionError(bad)
+    with tempfile.TemporaryDirectory() as empty:
+        try:
+            server.pick_files(empty, 1)
+        except ValueError as e:
+            assert "no images" in str(e)
+        else:
+            raise AssertionError("empty folder")
 
 
 if __name__ == "__main__":

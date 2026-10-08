@@ -16,7 +16,10 @@ body{background:var(--bg);color:var(--fg);font:12px/1.5 "Paper Mono",ui-monospac
 body.drag #stage{outline:1px dashed var(--fg);outline-offset:-14px}
 
 #stage{position:relative;display:grid;place-items:center;background:var(--stage);min-width:0;min-height:0;overflow:hidden}
-#view{box-shadow:0 0 0 1px var(--line),0 30px 80px -30px #000a}
+#frame{position:relative;box-shadow:0 0 0 1px var(--line),0 30px 80px -30px #000a}
+#view{display:block;width:100%;height:100%}
+#ink{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;touch-action:none}
+#ink.on{pointer-events:auto;cursor:crosshair}
 #empty{text-align:center;color:var(--dim);line-height:2}
 #toast{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:6px 12px;opacity:0;pointer-events:none;transition:opacity .2s;max-width:80%}
 #toast.on{opacity:1}
@@ -45,12 +48,22 @@ input[type=color]::-moz-color-swatch{border:0}
 .sl{display:grid;grid-template-columns:1fr auto;row-gap:5px;margin-bottom:14px}
 .sl span{color:var(--dim)}
 .sl .val{width:64px;text-align:right}
-.sl input[type=range]{grid-column:1/-1;appearance:none;-webkit-appearance:none;height:14px;border:0;padding:0;background:transparent;cursor:pointer;--p:0%}
-.sl input[type=range]::-webkit-slider-runnable-track{height:2px;background:linear-gradient(to right,var(--fg) var(--p),var(--line) var(--p))}
-.sl input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:10px;height:10px;margin-top:-4px;border-radius:50%;border:0;background:var(--fg)}
-.sl input[type=range]::-moz-range-track{height:2px;background:var(--line)}
-.sl input[type=range]::-moz-range-progress{height:2px;background:var(--fg)}
-.sl input[type=range]::-moz-range-thumb{width:10px;height:10px;border:0;border-radius:50%;background:var(--fg)}
+.sl input[type=range]{grid-column:1/-1}
+input[type=range]{appearance:none;-webkit-appearance:none;height:14px;border:0;padding:0;background:transparent;cursor:pointer;--p:0%}
+input[type=range]::-webkit-slider-runnable-track{height:2px;background:linear-gradient(to right,var(--fg) var(--p),var(--line) var(--p))}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:10px;height:10px;margin-top:-4px;border-radius:50%;border:0;background:var(--fg)}
+input[type=range]::-moz-range-track{height:2px;background:var(--line)}
+input[type=range]::-moz-range-progress{height:2px;background:var(--fg)}
+input[type=range]::-moz-range-thumb{width:10px;height:10px;border:0;border-radius:50%;background:var(--fg)}
+.row input[type=range]{width:96px}
+.row input[type=checkbox]{accent-color:var(--fg);width:12px;height:12px;margin:0;cursor:pointer}
+.row label{display:flex;align-items:center;gap:8px;color:var(--dim);cursor:pointer}
+.row label:has(:disabled){opacity:.4;cursor:default}
+#fpath{flex:1;text-align:left}
+#fn{width:40px}
+#curve{display:block;width:220px;height:220px;margin:0 auto 10px;border:1px solid var(--line);touch-action:none;cursor:crosshair}
+.note{color:var(--dim);margin:-6px 0 14px}
+button.tgl.on{color:var(--fg);box-shadow:0 1px 0 var(--fg)}
 
 .row{display:flex;align-items:center;gap:8px;margin-bottom:14px}
 .row .grow{flex:1}
@@ -75,7 +88,7 @@ input[type=color]::-moz-color-swatch{border:0}
 </head>
 <body>
 <main id="stage">
-  <img id="view" alt="collage preview" hidden>
+  <div id="frame" hidden><img id="view" alt="collage preview"><canvas id="ink" aria-label="drawing layer"></canvas></div>
   <div id="empty">drop images or pdfs<br><button id="open">or choose files</button></div>
   <div id="toast" role="status"></div>
 </main>
@@ -87,12 +100,22 @@ input[type=color]::-moz-color-swatch{border:0}
     <h2>source</h2>
     <div id="files"></div>
     <div class="row"><button id="add">+ add image / pdf</button></div>
+    <div class="row"><input id="fpath" placeholder="random from folder: paste its path" aria-label="folder path"><input id="fn" type="number" min="1" max="50" value="3" title="how many files" aria-label="how many files"><button id="fgo">pick</button></div>
     <input id="pick" type="file" multiple accept="image/*,.pdf,application/pdf" hidden>
   </section>
   <section><h2>cut <em id="cutinfo"></em></h2><div id="sl-cut"></div>
     <div class="row"><span class="grow">section size</span><input id="cwv" type="number" step="any" aria-label="section width"><span>×</span><input id="chv" type="number" step="any" aria-label="section height"><span id="cu"></span></div>
   </section>
   <section><h2>collage</h2><div id="sl-collage"></div></section>
+  <section>
+    <h2>guides</h2><div id="sl-guides"></div>
+    <div class="row"><button class="tgl" id="inkbtn" title="draw on the preview: sections drift toward your lines">✎ draw on preview</button><span class="grow"></span><button id="inkclear">clear</button></div>
+  </section>
+  <section>
+    <h2>tone</h2><div id="sl-tone"></div>
+    <canvas id="curve" width="440" height="440" aria-label="tone curve: click to add a point, drag to move, double-click a point to remove"></canvas>
+    <div class="row"><span class="grow">curve</span><button id="curvereset">reset</button></div>
+  </section>
   <section>
     <h2>layers</h2><div id="sl-layers"></div>
     <div class="row"><span>seed</span><button id="seed">↻ <span id="seedn"></span></button><span class="grow"></span><span>paper</span><input id="bg" type="color" aria-label="background colour"></div>
@@ -101,22 +124,38 @@ input[type=color]::-moz-color-swatch{border:0}
     <h2>output</h2>
     <div class="row"><span class="grow">size</span><input id="ow" type="number" step="any" aria-label="output width"><span>×</span><input id="oh" type="number" step="any" aria-label="output height"><span id="ou"></span></div>
     <div class="row"><span class="grow">dpi</span><input id="dpi" type="number" min="10" max="1200" list="dpis" aria-label="dpi"><datalist id="dpis"><option>72<option>150<option>300<option>600<option>1200</datalist></div>
-    <div class="row"><span class="grow">file</span><div class="seg" id="fmt"><button data-f="png" class="on">png</button><button data-f="tif">tif</button><button data-f="pdf">pdf</button></div></div>
+    <div class="row"><span class="grow">file</span><div class="seg" id="fmt"><button data-f="png" class="on">png</button><button data-f="tif">tif</button><button data-f="pdf">pdf</button><button data-f="map" title="vector pdf of how every section moved">map</button></div></div>
+    <div class="row"><label><input id="lines" type="checkbox"><span>also save portion linework</span></label></div>
+    <div id="mapsec" hidden>
+      <div class="row"><span class="grow">initial</span><input type="color" id="m1c" aria-label="initial tone"><input type="range" id="m1o" min="0" max="1" step=".01" aria-label="initial opacity"></div>
+      <div class="row"><span class="grow">migration</span><input type="color" id="m2c" aria-label="migration tone"><input type="range" id="m2o" min="0" max="1" step=".01" aria-label="migration opacity"></div>
+      <div class="row"><span class="grow">final</span><input type="color" id="m3c" aria-label="final tone"><input type="range" id="m3o" min="0" max="1" step=".01" aria-label="final opacity"></div>
+      <div class="row"><span class="grow">paper</span><input type="color" id="mp" aria-label="map paper colour"></div>
+      <div class="note">vector pdf. layers: paper, initial, migration, final. switch them in your pdf viewer.</div>
+    </div>
     <div id="px"></div>
     <button id="go"></button>
   </section>
 </aside>
 <script>
 const $ = s => document.querySelector(s), UN = {in: 1, cm: 2.54, mm: 25.4};
-const pc = v => Math.round(v * 100) + '%';
+const pc = v => Math.round(v * 100) + '%'; pc.pct = true;                      // .pct: typed 25 means 25%
+const sg = v => (v > 0 ? '+' : '') + Math.round(v * 100) + '%'; sg.pct = true;
 // [key, label, min, max, step, default, format]
 const SL = {
-  cut: [['cw', 'width', .05, 1, .01, .25, pc], ['ch', 'height', .05, 1, .01, .25, pc]],
+  cut: [['cw', 'width', .05, 1, .01, .25, pc], ['ch', 'height', .05, 1, .01, .25, pc],
+        ['ps', 'portion of each file', .1, 1, .01, 1, pc], ['pn', 'portions per file', 1, 6, 1, 2, v => v]],
   collage: [['scale', 'scale', .1, 4, .01, 1, v => v.toFixed(2) + '×'], ['var', 'size variance', 0, .9, .01, .25, pc],
-            ['rot', 'rotation', 0, 180, 1, 12, v => v + '°'], ['scatter', 'scatter', 0, 1, .01, .35, pc], ['density', 'density', .1, 1, .01, 1, pc]],
+            ['rot', 'rotation', 0, 180, 1, 12, v => v + '°'], ['scatter', 'scatter', 0, 1, .01, .35, pc], ['density', 'density', .1, 1, .01, 1, pc],
+            ['blur', 'edge blur', 0, 1, .01, 0, pc]],
+  guides: [['gs', 'grid pull', 0, 1, .01, 0, pc], ['gn', 'grid size', 2, 24, 1, 8, v => v], ['gi', 'grid irregularity', 0, 1, .01, 0, pc],
+           ['draw', 'drawing pull', 0, 1, .01, .7, pc]],
+  tone: [['con', 'contrast', -1, 1, .01, 0, sg], ['lb', 'black point', 0, 254, 1, 0, v => v], ['lw', 'white point', 1, 255, 1, 255, v => v],
+         ['lg', 'gamma', .2, 5, .01, 1, v => v.toFixed(2)]],
   layers: [['layers', 'layers', 1, 8, 1, 2, v => v], ['opacity', 'opacity', .05, 1, .01, 1, pc]],
 };
-const P = {}, SLIDER = {}, st = {files: [], w: 0, h: 0, touched: false, dpi: 300, fmt: 'png', bg: '#f4f2ee', unit: 'in', seed: 1};
+const P = {}, SLIDER = {}, st = {files: [], w: 0, h: 0, touched: false, dpi: 300, fmt: 'png', bg: '#f4f2ee', unit: 'in', seed: 1,
+  map: {m1c: '#8a8a90', m1o: .8, m2c: '#ff5a36', m2o: .8, m3c: '#18181b', m3o: 1, mp: '#f4f2ee'}};   // migration map: tone/opacity per layer, paper
 const show = v => +(v * UN[st.unit]).toFixed(st.unit === 'mm' ? 1 : 2);
 const toIn = v => v / UN[st.unit];
 
@@ -136,7 +175,7 @@ for (const [sec, list] of Object.entries(SL)) for (const [k, label, min, max, st
   o.onfocus = () => o.select();
   o.onchange = () => {   // typed value: percent fields take 25 for 25%, out-of-range values are clamped
     let v = parseFloat(o.value.replace(',', '.'));
-    if (!isNaN(v)) { r.value = Math.min(max, Math.max(min, f === pc ? v / 100 : v)); P[k] = +r.value; }
+    if (!isNaN(v)) { r.value = Math.min(max, Math.max(min, f.pct ? v / 100 : v)); P[k] = +r.value; }
     set(); info(); draw(false);
   };
   SLIDER[k] = {r, set};
@@ -158,6 +197,7 @@ function info(keep) {   // keep: id of the field being typed in, so it isn't rew
   $('#cutinfo').textContent = `${c}×${r}`; $('#cu').textContent = st.unit;
   if (keep !== '#cwv') $('#cwv').value = f ? show(f.w / c) : '';
   if (keep !== '#chv') $('#chv').value = f ? show(f.w * f.aspect / r) : '';
+  outUI();
 }
 
 // ---- sources
@@ -188,7 +228,7 @@ async function add(list) {
   after();
 }
 function after() {
-  $('#empty').hidden = st.files.length > 0; $('#view').hidden = !st.files.length;
+  $('#empty').hidden = st.files.length > 0; $('#frame').hidden = !st.files.length;
   syncOut(); files(); info(); draw(false);
 }
 $('#add').onclick = $('#open').onclick = () => $('#pick').click();
@@ -206,14 +246,23 @@ function syncOut() {
 function outUI() {
   $('#ow').value = st.w ? show(st.w) : ''; $('#oh').value = st.h ? show(st.h) : ''; $('#ou').textContent = st.unit;
   const w = Math.round(st.w * st.dpi), h = Math.round(st.h * st.dpi), big = w * h > 4e8;
-  $('#px').textContent = st.w ? `${w} × ${h} px · ${(w * h / 1e6).toFixed(1)} MP${big ? ' · over the 400 MP limit' : ''}` : '';
-  $('#px').classList.toggle('warn', big);
-  $('#go').textContent = 'export ' + st.fmt;
+  const map = st.fmt === 'map', lines = $('#lines');
+  $('#px').textContent = !st.w ? '' : map ? `vector · ${show(st.w)} × ${show(st.h)} ${st.unit}`
+    : `${w} × ${h} px · ${(w * h / 1e6).toFixed(1)} MP${big ? ' · over the 400 MP limit' : ''}`;
+  $('#px').classList.toggle('warn', big && !map);
+  lines.disabled = !(P.ps < .999);   // linework only exists when portions are in play
+  if (lines.disabled) lines.checked = false;
+  $('#go').textContent = 'export ' + st.fmt + (lines.checked ? ' + linework' : '');
 }
+$('#lines').onchange = outUI;
 $('#ow').oninput = () => { if (+$('#ow').value > 0) { st.w = toIn(+$('#ow').value); st.touched = true; outUI(); draw(false); } };
 $('#oh').oninput = () => { if (+$('#oh').value > 0) { st.h = toIn(+$('#oh').value); st.touched = true; outUI(); draw(false); } };
 $('#dpi').oninput = () => { if (+$('#dpi').value > 0) { st.dpi = +$('#dpi').value; outUI(); } };
-$('#fmt').onclick = e => { const f = e.target.dataset.f; if (!f) return; st.fmt = f; document.querySelectorAll('#fmt button').forEach(b => b.classList.toggle('on', b === e.target)); outUI(); };
+$('#fmt').onclick = e => {
+  const f = e.target.dataset.f; if (!f) return;
+  st.fmt = f; document.querySelectorAll('#fmt button').forEach(b => b.classList.toggle('on', b === e.target));
+  $('#mapsec').hidden = f !== 'map'; outUI(); draw(false);   // the stage shows the map while it's the chosen output
+};
 $('#unit').onchange = e => { st.unit = e.target.value; files(); info(); outUI(); };
 $('#seed').onclick = () => { st.seed = Math.floor(Math.random() * 10000); $('#seedn').textContent = st.seed; draw(false); };
 $('#bg').oninput = e => { st.bg = e.target.value; draw(true); };
@@ -221,16 +270,19 @@ $('#bg').onchange = () => draw(false);
 $('#bg').value = st.bg; $('#dpi').value = st.dpi; $('#seedn').textContent = st.seed;
 
 // ---- render: one request in flight; sliders drag at half resolution, then sharpen on release
-const body = () => JSON.stringify({p: {...P, seed: st.seed, bg: st.bg, w: st.w, h: st.h, dpi: st.dpi, pv: st.pv},
-  sources: st.files.map(f => ({id: f.id, w: f.w, page: f.page - 1}))});
+const body = () => JSON.stringify({
+  p: {...P, ...st.map, seed: st.seed, bg: st.bg, w: st.w, h: st.h, dpi: st.dpi, pv: st.pv,
+      pts: strokes.flat().map(([x, y]) => [+x.toFixed(4), +y.toFixed(4)])},
+  sources: st.files.map(f => ({id: f.id, w: f.w, page: f.page - 1})),
+  map: st.fmt === 'map', lines: $('#lines').checked});
 let busy = false, again = null;
 async function draw(fast) {
   if (!st.files.length) return;
   if (busy) { again = again === false ? false : fast; return; }
   busy = true;
   try {
-    const k = Math.min(($('#stage').clientWidth - 72) / st.w, ($('#stage').clientHeight - 72) / st.h), v = $('#view');
-    v.style.width = st.w * k + 'px'; v.style.height = st.h * k + 'px';
+    const k = Math.min(($('#stage').clientWidth - 72) / st.w, ($('#stage').clientHeight - 72) / st.h), v = $('#view'), fr = $('#frame');
+    fr.style.width = st.w * k + 'px'; fr.style.height = st.h * k + 'px'; inkRedraw();
     st.pv = Math.round(Math.min(2400, Math.max(300, Math.max(st.w, st.h) * k * devicePixelRatio * (fast ? .5 : 1))));
     const r = await fetch('/preview', {method: 'POST', body: body()});
     if (r.ok) {
@@ -250,12 +302,104 @@ $('#go').onclick = async () => {
   try {
     const r = await fetch('/export/' + st.fmt, {method: 'POST', body: body()});
     if (!r.ok) throw new Error((await r.json()).error);
-    const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = 'collage.' + st.fmt; a.click();
+    const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = r.headers.get('X-Name') || 'collage.' + st.fmt; a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 6e4);
   } catch (e) { toast(e.message); }
   b.disabled = false; outUI();
 };
-info(); outUI();
+// ---- random files from a folder: replaces the previous random pick, keeps files you added yourself
+$('#fgo').onclick = async () => {
+  const b = $('#fgo'); b.disabled = true;
+  try {
+    const r = await fetch('/folder', {method: 'POST', body: JSON.stringify({path: $('#fpath').value, n: +$('#fn').value || 1})});
+    const j = await r.json(); if (!r.ok) throw new Error(j.error);
+    st.files.filter(f => f.folder).forEach(f => fetch('/source/' + f.id, {method: 'DELETE'}));
+    st.files = st.files.filter(f => !f.folder).concat(j.sources.map(s => ({...s, page: 1, edited: false, folder: true})));
+    after(); toast(`picked ${j.sources.length} of ${j.total} files` + (j.skipped ? `, ${j.skipped} unreadable` : ''));
+  } catch (e) { toast(e.message); }
+  b.disabled = false;
+};
+
+// ---- drawings: freehand strokes over the preview (kept as 0..1 of the canvas); sections drift toward them
+const ink = $('#ink'), strokes = [];
+function inkRedraw() {
+  const r = ink.getBoundingClientRect(), d = devicePixelRatio;
+  ink.width = Math.round(r.width * d); ink.height = Math.round(r.height * d);   // resizing clears the canvas
+  const g = ink.getContext('2d'); g.lineWidth = 2 * d; g.lineCap = g.lineJoin = 'round'; g.strokeStyle = '#ff5a36';
+  for (const s of strokes) { g.beginPath(); s.forEach(([x, y], i) => g[i ? 'lineTo' : 'moveTo'](x * ink.width, y * ink.height)); g.stroke(); }
+}
+let cur = null;
+const at = e => { const r = ink.getBoundingClientRect(); return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height].map(v => Math.min(1, Math.max(0, v))); };
+ink.onpointerdown = e => { ink.setPointerCapture(e.pointerId); const p = at(e); cur = [p, p]; strokes.push(cur); inkRedraw(); };
+ink.onpointermove = e => {
+  if (!cur) return;
+  const [x, y] = at(e), [px, py] = cur[cur.length - 1], n = Math.ceil(Math.hypot(x - px, y - py) / .01);   // a point every 1% so fast strokes stay dense
+  for (let i = 1; i <= n; i++) cur.push([px + (x - px) * i / n, py + (y - py) * i / n]);
+  inkRedraw();
+};
+ink.onpointerup = ink.onpointercancel = () => { if (cur) { cur = null; draw(false); } };
+$('#inkbtn').onclick = e => { e.target.classList.toggle('on'); ink.classList.toggle('on', e.target.classList.contains('on')); };
+$('#inkclear').onclick = () => { strokes.length = 0; inkRedraw(); draw(false); };
+
+// ---- tone curve: drag points; a monotone cubic through them becomes the 256-entry table sent with every render
+const cv = $('#curve'), cx = cv.getContext('2d');
+let cpts = [[0, 0], [1, 1]], drag = -1;
+function curveFn(pts) {   // Fritsch-Carlson monotone cubic: never overshoots between points
+  const n = pts.length, d = [], m = [];
+  for (let i = 0; i < n - 1; i++) d.push((pts[i + 1][1] - pts[i][1]) / (pts[i + 1][0] - pts[i][0]));
+  m[0] = d[0]; m[n - 1] = d[n - 2];
+  for (let i = 1; i < n - 1; i++) m[i] = d[i - 1] * d[i] <= 0 ? 0 : (d[i - 1] + d[i]) / 2;
+  for (let i = 0; i < n - 1; i++) {
+    if (d[i] === 0) { m[i] = m[i + 1] = 0; continue; }
+    const a = m[i] / d[i], b = m[i + 1] / d[i], s = a * a + b * b;
+    if (s > 9) { const t = 3 / Math.sqrt(s); m[i] = t * a * d[i]; m[i + 1] = t * b * d[i]; }
+  }
+  return x => {
+    let i = 0; while (i < n - 2 && x > pts[i + 1][0]) i++;
+    const h = pts[i + 1][0] - pts[i][0], t = (x - pts[i][0]) / h, t2 = t * t, t3 = t2 * t;
+    return Math.min(1, Math.max(0, (2 * t3 - 3 * t2 + 1) * pts[i][1] + (t3 - 2 * t2 + t) * h * m[i] + (-2 * t3 + 3 * t2) * pts[i + 1][1] + (t3 - t2) * h * m[i + 1]));
+  };
+}
+function curveSet(fast) {
+  const f = curveFn(cpts), s = cv.width, css = getComputedStyle(document.documentElement);
+  P.curve = Array.from({length: 256}, (_, v) => Math.round(f(v / 255) * 255));
+  cx.clearRect(0, 0, s, s); cx.lineWidth = 1; cx.strokeStyle = css.getPropertyValue('--line');
+  for (let i = 1; i < 4; i++) { cx.beginPath(); cx.moveTo(i * s / 4, 0); cx.lineTo(i * s / 4, s); cx.moveTo(0, i * s / 4); cx.lineTo(s, i * s / 4); cx.stroke(); }
+  cx.lineWidth = 3; cx.strokeStyle = cx.fillStyle = css.getPropertyValue('--fg').trim();
+  cx.beginPath(); P.curve.forEach((y, v) => cx[v ? 'lineTo' : 'moveTo'](v / 255 * s, (1 - y / 255) * s)); cx.stroke();
+  cpts.forEach(([x, y]) => { cx.beginPath(); cx.arc(x * s, (1 - y) * s, 8, 0, 7); cx.fill(); });
+  draw(fast);
+}
+function curveMove(i, x, y) {   // interior points stay between their neighbours; the ends only slide up and down
+  const last = cpts.length - 1;
+  cpts[i] = [i === 0 ? 0 : i === last ? 1 : Math.min(cpts[i + 1][0] - .01, Math.max(cpts[i - 1][0] + .01, x)), Math.min(1, Math.max(0, y))];
+  curveSet(true);
+}
+const cat = e => { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) / r.width, 1 - (e.clientY - r.top) / r.height]; };
+cv.onpointerdown = e => {
+  cv.setPointerCapture(e.pointerId);
+  const [x, y] = cat(e);
+  drag = cpts.findIndex(([px, py]) => Math.hypot(px - x, py - y) < .06);
+  if (drag < 0 && x > .01 && x < .99) { const np = [x, y]; cpts.push(np); cpts.sort((a, b) => a[0] - b[0]); drag = cpts.indexOf(np); }
+  if (drag >= 0) curveMove(drag, x, y);
+};
+cv.onpointermove = e => { if (drag >= 0) curveMove(drag, ...cat(e)); };
+cv.onpointerup = () => { if (drag >= 0) { drag = -1; draw(false); } };
+cv.ondblclick = e => {
+  const [x, y] = cat(e), i = cpts.findIndex(([px, py], k) => k > 0 && k < cpts.length - 1 && Math.hypot(px - x, py - y) < .06);
+  if (i > 0) { cpts.splice(i, 1); curveSet(false); }
+};
+$('#curvereset').onclick = () => { cpts = [[0, 0], [1, 1]]; curveSet(false); };
+
+// ---- migration map controls
+for (const [id, v] of Object.entries(st.map)) {
+  const el = $('#' + id), fill = () => el.type === 'range' && el.style.setProperty('--p', el.value * 100 + '%');
+  el.value = v; fill();
+  el.oninput = () => { st.map[id] = el.type === 'range' ? +el.value : el.value; fill(); draw(true); };
+  el.onchange = () => draw(false);
+}
+
+info(); outUI(); curveSet(false);
 </script>
 </body>
 </html>

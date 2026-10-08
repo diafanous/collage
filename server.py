@@ -1,5 +1,6 @@
 """py server.py [port]  ->  opens the UI at http://127.0.0.1:8765"""
 import json
+import random
 import sys
 import threading
 import time
@@ -15,6 +16,25 @@ import collage
 
 ROOT = Path(__file__).parent
 STORE = {}   # id -> collage.Source, for this session only
+EXT = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp", ".bmp", ".gif", ".pdf"}
+
+
+def add_source(name, data):
+    s = collage.open_source(name, data)
+    sid = uuid.uuid4().hex[:8]
+    STORE[sid] = s
+    return dict(id=sid, name=name, pdf=s.pdf, pages=s.pages, w=s.w_in, aspect=s.aspect, assumed=s.assumed)
+
+
+def pick_files(folder, n):
+    """n random images/PDFs from a folder (not its sub-folders) -> (chosen, how many it holds)."""
+    d = Path(folder.strip().strip('"'))
+    if not d.is_dir():
+        raise ValueError(f"not a folder: {folder.strip()}")
+    files = [f for f in d.iterdir() if f.suffix.lower() in EXT and f.is_file()]
+    if not files:
+        raise ValueError("no images or PDFs in that folder")
+    return random.sample(files, min(max(n, 1), 50, len(files))), len(files)
 
 
 @lru_cache
@@ -73,19 +93,25 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         def go():
             if self.path == "/source":
-                name = unquote(self.headers.get("X-Name", "untitled"))
-                s = collage.open_source(name, self.body())
-                sid = uuid.uuid4().hex[:8]
-                STORE[sid] = s
-                self.reply(200, dict(id=sid, name=name, pdf=s.pdf, pages=s.pages, w=s.w_in, aspect=s.aspect, assumed=s.assumed))
+                self.reply(200, add_source(unquote(self.headers.get("X-Name", "untitled")), self.body()))
+            elif self.path == "/folder":
+                req = json.loads(self.body())
+                files, total = pick_files(str(req["path"]), int(req["n"]))
+                got, skipped = [], 0
+                for f in files:
+                    try:
+                        got.append(add_source(f.name, f.read_bytes()))
+                    except (ValueError, OSError):
+                        skipped += 1
+                self.reply(200, dict(sources=got, skipped=skipped, total=total))
             elif self.path == "/preview":
                 req, t0 = json.loads(self.body()), time.perf_counter()
-                jpg = collage.preview(req["p"], req["sources"], STORE)
+                jpg = collage.preview(req["p"], req["sources"], STORE, bool(req.get("map")))
                 self.reply(200, jpg, "image/jpeg", X_Ms=str(round((time.perf_counter() - t0) * 1000)))
             elif self.path.startswith("/export/"):
                 fmt, req = self.path[8:], json.loads(self.body())
-                data = collage.export(req["p"], req["sources"], STORE, fmt)
-                self.reply(200, data, "application/octet-stream")
+                data, name = collage.export(req["p"], req["sources"], STORE, fmt, bool(req.get("lines")))
+                self.reply(200, data, "application/octet-stream", X_Name=name)
             else:
                 self.reply(404, {"error": "not found"})
         self.guarded(go)
