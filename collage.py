@@ -66,8 +66,8 @@ def open_source(name, data):
             src = Source(name, data, True, len(doc), r.width / 72, r.height / r.width, False)
         else:
             im, dpi = _decode(data)
-            ok = dpi and dpi[0] > 1   # dpi (1, 1) means "aspect ratio only"
-            d = round(dpi[0], 1) if ok else ASSUMED_DPI   # PNG stores px/metre: 300 dpi reads back as 299.9994
+            ok = dpi and float(dpi[0]) > 1   # dpi (1, 1) means "aspect ratio only"
+            d = round(float(dpi[0]), 1) if ok else ASSUMED_DPI   # PNG stores px/metre: 300 dpi reads back as 299.9994
             src = Source(name, data, False, 1, im.width / d, im.height / im.width, not ok)
             src.thumbs[0] = im.copy()
             src.thumbs[0].thumbnail((PREVIEW_SRC, PREVIEW_SRC), Image.BILINEAR)

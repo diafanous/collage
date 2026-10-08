@@ -1,5 +1,6 @@
 """py test_collage.py  (also works under pytest)"""
 import io
+import json
 import struct
 
 import pymupdf
@@ -44,6 +45,14 @@ def test_16bit_gray_is_scaled_not_clipped():
     Image.frombytes("I;16", (256, 4), ramp).save(buf, "PNG")
     out = C.raster(C.open_source("g", buf.getvalue()))
     assert [out.getpixel((x, 0))[0] for x in (0, 64, 128, 255)] == [0, 64, 128, 255]
+
+
+def test_source_size_is_json_serialisable_for_every_format():
+    for fmt in ("PNG", "TIFF", "JPEG"):   # TIFF dpi arrives as a rational, which json can't encode
+        buf = io.BytesIO()
+        Image.new("RGB", (300, 150), "red").save(buf, fmt, dpi=(300, 300))
+        s = C.open_source("x", buf.getvalue())
+        assert json.loads(json.dumps(dict(w=s.w_in, aspect=s.aspect)))["w"] == 1.0, fmt
 
 
 def test_unreadable_file_is_rejected():
