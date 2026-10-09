@@ -106,7 +106,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200, dict(sources=got, skipped=skipped, total=total))
             elif self.path == "/preview":
                 req, t0 = json.loads(self.body()), time.perf_counter()
-                jpg = collage.preview(req["p"], req["sources"], STORE, bool(req.get("map")))
+                jpg = collage.preview(req["p"], req["sources"], STORE, bool(req.get("map")), bool(req.get("grid")))
                 self.reply(200, jpg, "image/jpeg", X_Ms=str(round((time.perf_counter() - t0) * 1000)))
             elif self.path.startswith("/export/"):
                 fmt, req = self.path[8:], json.loads(self.body())

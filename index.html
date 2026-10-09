@@ -19,7 +19,8 @@ body.drag #stage{outline:1px dashed var(--fg);outline-offset:-14px}
 #frame{position:relative;box-shadow:0 0 0 1px var(--line),0 30px 80px -30px #000a}
 #view{display:block;width:100%;height:100%}
 #ink{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;touch-action:none}
-#ink.on{pointer-events:auto;cursor:crosshair}
+#ink.on{pointer-events:auto;cursor:crosshair;outline:1px dashed #ff5a36;outline-offset:3px}
+#tools{position:absolute;top:14px;left:16px;display:flex;gap:16px;padding:6px 10px;background:var(--panel);border:1px solid var(--line)}
 #empty{text-align:center;color:var(--dim);line-height:2}
 #toast{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:6px 12px;opacity:0;pointer-events:none;transition:opacity .2s;max-width:80%}
 #toast.on{opacity:1}
@@ -89,6 +90,11 @@ button.tgl.on{color:var(--fg);box-shadow:0 1px 0 var(--fg)}
 <body>
 <main id="stage">
   <div id="frame" hidden><img id="view" alt="collage preview"><canvas id="ink" aria-label="drawing layer"></canvas></div>
+  <div id="tools" hidden>
+    <button class="tgl" id="inkbtn" title="sketch on the preview: sections drift toward your lines (strength: drawing pull)">✎ draw</button>
+    <button class="tgl" id="gridbtn" title="show the guide grid; sections settle one per cell (strength: grid pull)">▦ grid</button>
+    <button id="inkclear" title="erase your drawing">clear</button>
+  </div>
   <div id="empty">drop images or pdfs<br><button id="open">or choose files</button></div>
   <div id="toast" role="status"></div>
 </main>
@@ -108,8 +114,7 @@ button.tgl.on{color:var(--fg);box-shadow:0 1px 0 var(--fg)}
   </section>
   <section><h2>collage</h2><div id="sl-collage"></div></section>
   <section>
-    <h2>guides</h2><div id="sl-guides"></div>
-    <div class="row"><button class="tgl" id="inkbtn" title="draw on the preview: sections drift toward your lines">✎ draw on preview</button><span class="grow"></span><button id="inkclear">clear</button></div>
+    <h2>guides <em>draw and grid buttons are on the preview</em></h2><div id="sl-guides"></div>
   </section>
   <section>
     <h2>tone</h2><div id="sl-tone"></div>
@@ -127,11 +132,16 @@ button.tgl.on{color:var(--fg);box-shadow:0 1px 0 var(--fg)}
     <div class="row"><span class="grow">file</span><div class="seg" id="fmt"><button data-f="png" class="on">png</button><button data-f="tif">tif</button><button data-f="pdf">pdf</button><button data-f="map" title="vector pdf of how every section moved">map</button></div></div>
     <div class="row"><label><input id="lines" type="checkbox"><span>also save portion linework</span></label></div>
     <div id="mapsec" hidden>
-      <div class="row"><span class="grow">initial</span><input type="color" id="m1c" aria-label="initial tone"><input type="range" id="m1o" min="0" max="1" step=".01" aria-label="initial opacity"></div>
-      <div class="row"><span class="grow">migration</span><input type="color" id="m2c" aria-label="migration tone"><input type="range" id="m2o" min="0" max="1" step=".01" aria-label="migration opacity"></div>
-      <div class="row"><span class="grow">final</span><input type="color" id="m3c" aria-label="final tone"><input type="range" id="m3o" min="0" max="1" step=".01" aria-label="final opacity"></div>
-      <div class="row"><span class="grow">paper</span><input type="color" id="mp" aria-label="map paper colour"></div>
-      <div class="note">vector pdf. layers: paper, initial, migration, final. switch them in your pdf viewer.</div>
+      <div class="row"><b>1 initial</b></div>
+      <div class="row"><span class="grow">tone / opacity</span><input type="color" id="m1c" aria-label="initial tone"><input type="range" id="m1o" min="0" max="1" step=".01" aria-label="initial line opacity"></div>
+      <div class="row"><span class="grow">paper / opacity</span><input type="color" id="m1p" aria-label="initial paper colour"><input type="range" id="m1a" min="0" max="1" step=".01" aria-label="initial paper opacity"></div>
+      <div class="row"><b>2 migration</b></div>
+      <div class="row"><span class="grow">tone / opacity</span><input type="color" id="m2c" aria-label="migration tone"><input type="range" id="m2o" min="0" max="1" step=".01" aria-label="migration line opacity"></div>
+      <div class="row"><span class="grow">paper / opacity</span><input type="color" id="m2p" aria-label="migration paper colour"><input type="range" id="m2a" min="0" max="1" step=".01" aria-label="migration paper opacity"></div>
+      <div class="row"><b>3 final</b></div>
+      <div class="row"><span class="grow">tone / opacity</span><input type="color" id="m3c" aria-label="final tone"><input type="range" id="m3o" min="0" max="1" step=".01" aria-label="final line opacity"></div>
+      <div class="row"><span class="grow">paper / opacity</span><input type="color" id="m3p" aria-label="final paper colour"><input type="range" id="m3a" min="0" max="1" step=".01" aria-label="final paper opacity"></div>
+      <div class="note">downloads a zip: the three layers as separate vector pdfs (each with its own paper, paper opacity 0 = none) to print and stack, plus one pdf holding all three as layers. the stage shows them stacked.</div>
     </div>
     <div id="px"></div>
     <button id="go"></button>
@@ -155,7 +165,9 @@ const SL = {
   layers: [['layers', 'layers', 1, 8, 1, 2, v => v], ['opacity', 'opacity', .05, 1, .01, 1, pc]],
 };
 const P = {}, SLIDER = {}, st = {files: [], w: 0, h: 0, touched: false, dpi: 300, fmt: 'png', bg: '#f4f2ee', unit: 'in', seed: 1,
-  map: {m1c: '#8a8a90', m1o: .8, m2c: '#ff5a36', m2o: .8, m3c: '#18181b', m3o: 1, mp: '#f4f2ee'}};   // migration map: tone/opacity per layer, paper
+  grid: false,   // guide grid overlay on the preview
+  // migration map, per layer: tone, line opacity, paper colour, paper opacity (0 = no paper)
+  map: {m1c: '#8a8a90', m1o: .8, m1p: '#f4f2ee', m1a: 1, m2c: '#ff5a36', m2o: .8, m2p: '#f4f2ee', m2a: 0, m3c: '#18181b', m3o: 1, m3p: '#f4f2ee', m3a: 0}};
 const show = v => +(v * UN[st.unit]).toFixed(st.unit === 'mm' ? 1 : 2);
 const toIn = v => v / UN[st.unit];
 
@@ -169,18 +181,26 @@ for (const [sec, list] of Object.entries(SL)) for (const [k, label, min, max, st
   l.innerHTML = `<span>${label}</span><input class="val" aria-label="${label} value"><input type="range" aria-label="${label}" min="${min}" max="${max}" step="${step}" value="${def}">`;
   const r = l.querySelector('[type=range]'), o = l.querySelector('.val');
   const set = () => { o.value = f(+r.value); r.style.setProperty('--p', (r.value - min) / (max - min) * 100 + '%'); P[k] = +r.value; };
-  r.oninput = () => { set(); info(); draw(true); };
+  r.oninput = () => { set(); touched(k); info(); draw(true); };
   r.onchange = () => draw(false);
-  l.ondblclick = () => { r.value = def; set(); info(); draw(false); };
+  l.ondblclick = () => { r.value = def; set(); touched(k); info(); draw(false); };
   o.onfocus = () => o.select();
   o.onchange = () => {   // typed value: percent fields take 25 for 25%, out-of-range values are clamped
     let v = parseFloat(o.value.replace(',', '.'));
     if (!isNaN(v)) { r.value = Math.min(max, Math.max(min, f.pct ? v / 100 : v)); P[k] = +r.value; }
-    set(); info(); draw(false);
+    set(); touched(k); info(); draw(false);
   };
   SLIDER[k] = {r, set};
   set(); $('#sl-' + sec).append(l);
 }
+
+// moving any grid slider shows the grid; size and irregularity do nothing while the pull is 0, so lift it
+function touched(k) {
+  if (!['gs', 'gn', 'gi'].includes(k)) return;
+  if (k !== 'gs' && P.gs === 0) { SLIDER.gs.r.value = .7; SLIDER.gs.set(); }
+  if (!st.grid) { st.grid = true; tools(); }
+}
+function tools() { $('#gridbtn').classList.toggle('on', st.grid); }
 
 // typed physical section size (in the chosen unit) -> the cut slider that produces it
 for (const [id, k, side] of [['#cwv', 'cw', f => f.w], ['#chv', 'ch', f => f.w * f.aspect]]) {
@@ -228,7 +248,7 @@ async function add(list) {
   after();
 }
 function after() {
-  $('#empty').hidden = st.files.length > 0; $('#frame').hidden = !st.files.length;
+  $('#empty').hidden = st.files.length > 0; $('#frame').hidden = $('#tools').hidden = !st.files.length;
   syncOut(); files(); info(); draw(false);
 }
 $('#add').onclick = $('#open').onclick = () => $('#pick').click();
@@ -274,7 +294,7 @@ const body = () => JSON.stringify({
   p: {...P, ...st.map, seed: st.seed, bg: st.bg, w: st.w, h: st.h, dpi: st.dpi, pv: st.pv,
       pts: strokes.flat().map(([x, y]) => [+x.toFixed(4), +y.toFixed(4)])},
   sources: st.files.map(f => ({id: f.id, w: f.w, page: f.page - 1})),
-  map: st.fmt === 'map', lines: $('#lines').checked});
+  map: st.fmt === 'map', grid: st.grid, lines: $('#lines').checked});
 let busy = false, again = null;
 async function draw(fast) {
   if (!st.files.length) return;
@@ -340,6 +360,7 @@ ink.onpointermove = e => {
 ink.onpointerup = ink.onpointercancel = () => { if (cur) { cur = null; draw(false); } };
 $('#inkbtn').onclick = e => { e.target.classList.toggle('on'); ink.classList.toggle('on', e.target.classList.contains('on')); };
 $('#inkclear').onclick = () => { strokes.length = 0; inkRedraw(); draw(false); };
+$('#gridbtn').onclick = () => { st.grid = !st.grid; tools(); draw(false); };
 
 // ---- tone curve: drag points; a monotone cubic through them becomes the 256-entry table sent with every render
 const cv = $('#curve'), cx = cv.getContext('2d');

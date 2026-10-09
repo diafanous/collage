@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import pymupdf
-from PIL import Image, ImageChops, ImageFilter, ImageOps
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps
 
 MAX_PIXELS = 400_000_000   # output cap: RGB at the cap is ~1.2 GB
 Image.MAX_IMAGE_PIXELS = MAX_PIXELS
@@ -32,9 +32,11 @@ SPEC = dict(
     con=(-1, 1, 0), lb=(0, 254, 0), lw=(1, 255, 255), lg=(0.2, 5, 1),   # contrast, levels black / white / gamma
     layers=(1, 8, 2), opacity=(0.05, 1, 1), seed=(0, 9999, 1),
     w=(0.25, 200, 8.5), h=(0.25, 200, 11), dpi=(10, 1200, 300), pv=(200, 3000, 1000),  # canvas in, dpi, preview px
-    m1o=(0, 1, 0.8), m2o=(0, 1, 0.8), m3o=(0, 1, 1),          # migration map: layer opacities
+    m1o=(0, 1, 0.8), m2o=(0, 1, 0.8), m3o=(0, 1, 1),          # migration map: line opacity per layer
+    m1a=(0, 1, 1), m2a=(0, 1, 0), m3a=(0, 1, 0),              # migration map: paper opacity per layer (0 = no paper)
 )
-COLORS = dict(bg="#f4f2ee", mp="#f4f2ee", m1c="#8a8a90", m2c="#ff5a36", m3c="#18181b")   # canvas, map paper, map layer tones
+COLORS = dict(bg="#f4f2ee", m1c="#8a8a90", m2c="#ff5a36", m3c="#18181b",   # canvas, map tone per layer
+              m1p="#f4f2ee", m2p="#f4f2ee", m3p="#f4f2ee")                 # map paper per layer
 
 
 def clean(raw):
@@ -136,19 +138,24 @@ def _portions(p, si):
     return out
 
 
-def _nodes(p, W, H):
-    """Guide grid nodes[i][j] in inches: gn columns, square-ish rows, each node pushed off its regular spot by gi."""
+def _grid(p, W, H):
+    """Guide grid as cell edges (xs, ys) in inches: gn columns, square-ish rows. gi = 0 gives equal cells;
+    more makes columns and rows progressively uneven (up to about twice as wide as their neighbours)."""
     gx, gy = int(p["gn"]), min(48, max(1, round(p["gn"] * H / W)))
-    g, dx, dy = random.Random(int(p["seed"]) * 977 + 13), W / gx, H / gy
-    return [[((i + 0.5 + p["gi"] * (g.random() - 0.5)) * dx, (j + 0.5 + p["gi"] * (g.random() - 0.5)) * dy)
-             for j in range(gy)] for i in range(gx)]
+    g = random.Random(int(p["seed"]) * 977 + 13)
+
+    def edges(n, total):
+        w = [1 + p["gi"] * 0.9 * (2 * g.random() - 1) for _ in range(n)]
+        out = [0.0]
+        for v in w:
+            out.append(out[-1] + v / sum(w) * total)
+        return out
+
+    return edges(gx, W), edges(gy, H)
 
 
-def _nearest_node(nodes, x, y, W, H):
-    gx, gy = len(nodes), len(nodes[0])
-    i, j = min(max(int(x / W * gx), 0), gx - 1), min(max(int(y / H * gy), 0), gy - 1)
-    near = (n for col in nodes[max(i - 1, 0):i + 2] for n in col[max(j - 1, 0):j + 2])   # jitter is under half a cell
-    return min(near, key=lambda n: (n[0] - x) ** 2 + (n[1] - y) ** 2)
+def _cells(xs, ys):
+    return [((xs[i] + xs[i + 1]) / 2, (ys[j] + ys[j + 1]) / 2) for i in range(len(xs) - 1) for j in range(len(ys) - 1)]
 
 
 def layout(p, sizes, W, H):
@@ -159,12 +166,12 @@ def layout(p, sizes, W, H):
     """
     rng = random.Random(int(p["seed"]))
     cols, rows = max(1, int(1 / p["cw"] + 0.5)), max(1, int(1 / p["ch"] + 0.5))
-    nodes = _nodes(p, W, H) if p["gs"] > 0 else None
+    cells = _cells(*_grid(p, W, H)) if p["gs"] > 0 else None
     pts = [(x * W, y * H) for x, y in p["pts"]] if p["draw"] > 0 else []
     parts = [_portions(p, si) for si in range(len(sizes))]
     out = []
     for _ in range(int(p["layers"])):
-        layer = []
+        layer, free = [], list(cells or [])   # each layer hands out every grid cell once, so sections spread over the grid instead of piling on a few
         for si, (sw, sh) in enumerate(sizes):
             for a0, b0, a1, b1 in parts[si]:
                 fw, fh = (a1 - a0) / cols, (b1 - b0) / rows
@@ -177,8 +184,10 @@ def layout(p, sizes, W, H):
                         u0, v0 = a0 + c * fw, b0 + r * fh
                         bx, by = (u0 + fw / 2) * W, (v0 + fh / 2) * H   # home: same relative place on the canvas as in the source
                         x, y = bx + (rx * W - bx) * p["scatter"], by + (ry * H - by) * p["scatter"]
-                        if nodes:
-                            nx, ny = _nearest_node(nodes, x, y, W, H)
+                        if cells:
+                            free = free or list(cells)   # more sections than cells: start another round
+                            nx, ny = min(free, key=lambda c: (c[0] - x) ** 2 + (c[1] - y) ** 2)
+                            free.remove((nx, ny))
                             x, y = x + (nx - x) * p["gs"], y + (ny - y) * p["gs"]
                         if pts:
                             qx, qy = min(pts, key=lambda q: (q[0] - x) ** 2 + (q[1] - y) ** 2)
@@ -284,11 +293,17 @@ def _sizes(specs, store):
     return out
 
 
-def migration_pdf(raw, specs, store):
-    """Vector PDF of the canvas, no pixels: toggleable layers paper / 1 initial / 2 migration / 3 final.
+LAYERS = {1: "1 initial", 2: "2 migration", 3: "3 final"}
+
+
+def _map_doc(raw, specs, store, layers):
+    """Vector PDF of the canvas holding the given map layers (1 initial, 2 migration, 3 final), no pixels.
 
     Initial = every section's outline where it was cut; final = where it landed; migration = lines joining
-    corresponding corners (they show move, turn and scale at once) plus an arrow along each centre's path.
+    corresponding corners (they show move, turn and scale at once) plus an arrow along each centre's path,
+    with the guide grid and drawn strokes in faint lines when they were steering. Each layer has its own tone,
+    line opacity and paper (colour + opacity; opacity 0 = no paper). With several layers they are also real PDF
+    layers, so a viewer that supports them can switch each on and off.
     """
     p = clean(raw)
     if not specs:
@@ -297,14 +312,14 @@ def migration_pdf(raw, specs, store):
     pieces = layout(p, _sizes(specs, store), W, H)
     doc = pymupdf.open()
     page = doc.new_page(width=W * 72, height=H * 72)
-    oc = [doc.add_ocg(n) for n in ("paper", "1 initial", "2 migration", "3 final")]
+    oc = {n: doc.add_ocg(LAYERS[n]) if len(layers) > 1 else 0 for n in layers}
     pt = lambda q: (q[0] * 72, q[1] * 72)
 
-    def ink(layer, draw, closed=True, fill=0):   # fill: fill opacity as a share of the layer's opacity
-        col, op = _rgb(p[f"m{layer}c"]), p[f"m{layer}o"]
+    def ink(n, draw, closed=True, fill=0, soft=1):   # fill: fill opacity as a share of the layer's; soft: scales the line opacity
+        col, op = _rgb(p[f"m{n}c"]), p[f"m{n}o"]
         sh = page.new_shape()
         draw(sh)
-        sh.finish(color=col, fill=col if fill else None, width=0.6, closePath=closed, stroke_opacity=op, fill_opacity=op * fill, oc=oc[layer])
+        sh.finish(color=col, fill=col if fill else None, width=0.6, closePath=closed, stroke_opacity=op * soft, fill_opacity=op * fill, oc=oc[n])
         sh.commit()
 
     def initial(sh):
@@ -334,12 +349,43 @@ def migration_pdf(raw, specs, store):
             sh.draw_polyline([pt((cx, cy)), pt((cx - (ux + 0.4 * uy) * n, cy - (uy - 0.4 * ux) * n)),
                               pt((cx - (ux - 0.4 * uy) * n, cy - (uy + 0.4 * ux) * n))])
 
-    page.draw_rect(page.rect, color=None, fill=_rgb(p["mp"]), oc=oc[0])
-    ink(1, initial, fill=0.15)
-    ink(2, lines, closed=False)
-    ink(2, heads, fill=1)
-    ink(3, final, fill=0.15)
+    def grid(sh):
+        xs, ys = _grid(p, W, H)
+        for x in xs:
+            sh.draw_line(pt((x, 0)), pt((x, H)))
+        for y in ys:
+            sh.draw_line(pt((0, y)), pt((W, y)))
+
+    def strokes(sh):
+        sh.draw_polyline([pt((x * W, y * H)) for x, y in p["pts"]])
+
+    for n in layers:
+        if p[f"m{n}a"] > 0:
+            page.draw_rect(page.rect, color=None, fill=_rgb(p[f"m{n}p"]), fill_opacity=p[f"m{n}a"], oc=oc[n])
+        if n == 1:
+            ink(1, initial, fill=0.15)
+        elif n == 2:
+            if p["gs"] > 0:
+                ink(2, grid, closed=False, soft=0.35)
+            if p["draw"] > 0 and len(p["pts"]) > 1:
+                ink(2, strokes, closed=False, soft=0.6)
+            ink(2, lines, closed=False)
+            ink(2, heads, fill=1)
+        else:
+            ink(3, final, fill=0.15)
     return doc.tobytes(deflate=True)
+
+
+def migration_pdf(raw, specs, store):
+    """All three layers in one PDF (also what the stage previews)."""
+    return _map_doc(raw, specs, store, (1, 2, 3))
+
+
+def migration_pdfs(raw, specs, store):
+    """{file name: bytes}: each layer as its own PDF, to print or plot and stack, plus the one layered PDF."""
+    out = {f"collage-{LAYERS[n].replace(' ', '-')}.pdf": _map_doc(raw, specs, store, (n,)) for n in (1, 2, 3)}
+    out["collage-map-layers.pdf"] = migration_pdf(raw, specs, store)
+    return out
 
 
 def portions_pdf(raw, specs, store):
@@ -367,24 +413,35 @@ def portions_pdf(raw, specs, store):
     return doc.tobytes(deflate=True)
 
 
-def preview(raw, specs, store, as_map=False):
+def preview(raw, specs, store, as_map=False, show_grid=False):
     if as_map:   # the map is a PDF: rasterise its page so the stage can show it
         page = pymupdf.open(stream=migration_pdf(raw, specs, store), filetype="pdf")[0]
         z = clean(raw)["pv"] / max(page.rect.width, page.rect.height)
         return page.get_pixmap(matrix=pymupdf.Matrix(z, z), alpha=False).tobytes("jpeg", jpg_quality=90)
+    p, im = compose(raw, specs, store)
+    if show_grid:   # guide overlay, preview only: cell edges and a dot where each section will settle
+        xs, ys = _grid(p, p["w"], p["h"])
+        k, ink = im.width / p["w"], ImageDraw.Draw(im)
+        t = max(1, im.width // 400)   # line weight follows the preview size so it stays visible when the stage scales it
+        for x in xs:
+            ink.line([(x * k, 0), (x * k, im.height)], fill=(255, 90, 54), width=t)
+        for y in ys:
+            ink.line([(0, y * k), (im.width, y * k)], fill=(255, 90, 54), width=t)
+        for x, y in _cells(xs, ys):
+            ink.ellipse([x * k - 2 * t, y * k - 2 * t, x * k + 2 * t, y * k + 2 * t], fill=(255, 90, 54))
     buf = io.BytesIO()
-    compose(raw, specs, store)[1].save(buf, "JPEG", quality=88)
+    im.save(buf, "JPEG", quality=88)
     return buf.getvalue()
 
 
 def export(raw, specs, store, fmt, lines=False):
-    """-> (file bytes, file name). fmt: png / tif / pdf, or map for the migration PDF alone.
-    With lines=True the result is a zip of the file plus the portion linework."""
+    """-> (file bytes, file name). fmt: png / tif / pdf, or map for the migration map (a zip of its PDFs).
+    With lines=True the portion linework is added, which also makes the result a zip."""
     if fmt not in ("png", "tif", "pdf", "map"):
         raise ValueError(f"unknown format {fmt!r}")
     extra = portions_pdf(raw, specs, store) if lines else None   # cheap, so a bad request fails before the big render
     if fmt == "map":
-        data, name = migration_pdf(raw, specs, store), "collage-map.pdf"
+        files = migration_pdfs(raw, specs, store)
     else:
         p, im = compose(raw, specs, store, final=True)
         dpi, buf = round(p["dpi"]), io.BytesIO()
@@ -397,11 +454,14 @@ def export(raw, specs, store, fmt, lines=False):
             page = doc.new_page(width=p["w"] * 72, height=p["h"] * 72)
             page.insert_image(page.rect, pixmap=pymupdf.Pixmap(pymupdf.csRGB, im.width, im.height, im.tobytes(), False))
             buf.write(doc.tobytes(deflate=True))
-        data, name = buf.getvalue(), f"collage.{fmt}"
+        files = {f"collage.{fmt}": buf.getvalue()}
     if extra:
-        zbuf = io.BytesIO()
-        with zipfile.ZipFile(zbuf, "w") as z:   # stored, not deflated: PNG/TIFF/PDF are already compressed
+        files["collage-portions.pdf"] = extra
+    if len(files) == 1:
+        (name, data), = files.items()
+        return data, name
+    zbuf = io.BytesIO()
+    with zipfile.ZipFile(zbuf, "w") as z:   # stored, not deflated: PNG/TIFF/PDF are already compressed
+        for name, data in files.items():
             z.writestr(name, data)
-            z.writestr("collage-portions.pdf", extra)
-        return zbuf.getvalue(), "collage.zip"
-    return data, name
+    return zbuf.getvalue(), "collage-map.zip" if fmt == "map" else "collage.zip"

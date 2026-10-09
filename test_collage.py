@@ -214,36 +214,83 @@ def test_edge_blur_fades_section_edges_only():
     assert sharp.getpixel(edge) == (255, 255, 255) and soft.getpixel(edge)[0] < 60
 
 
-def test_migration_pdf_is_vector_with_four_layers():
-    store, specs, raw = two_sections()
-    raw = {**raw, "scatter": 0.8, "rot": 40, "m2c": "#ff0000", "m2o": 0.5, "mp": "#ffffff"}
-    doc = pymupdf.open(stream=C.migration_pdf(raw, specs, store), filetype="pdf")
-    assert doc[0].rect == pymupdf.Rect(0, 0, 8 * 72, 6 * 72)
-    assert sorted(o["name"] for o in doc.get_ocgs().values()) == ["1 initial", "2 migration", "3 final", "paper"]
-    assert doc[0].get_images() == []                                                   # pure vector
-    d = doc[0].get_drawings()
-    assert [x["layer"] for x in d] == ["paper", "1 initial", "2 migration", "2 migration", "3 final"]   # each in its own layer
-    assert d[2]["color"] == (1.0, 0.0, 0.0) and abs(d[2]["stroke_opacity"] - 0.5) < 1e-2               # tone + opacity honoured
-    assert len(d[1]["items"]) >= 16 and len(d[2]["items"]) == 16 * 5                               # 16 sections: 4 corner lines + 1 path each
-    im = Image.open(io.BytesIO(C.preview({**raw, "pv": 400}, specs, store, as_map=True)))
-    assert im.size[0] == 400                                                           # the stage can show it
+def test_grid_spreads_sections_one_per_cell():
+    raw = {**FLAT, "w": 8, "h": 6, "scatter": 0.7, "gs": 1, "gn": 8, "gi": 0}          # 8 x 6 = 48 cells for 16 sections
+    spots = [(round(pc[2], 6), round(pc[3], 6)) for pc in pieces(raw)]
+    assert len(set(spots)) == 16                                                       # nobody shares a cell
+    assert len({round(pc[2], 6) for pc in pieces({**raw, "gn": 3})}) <= 3             # coarse grid: only 3 columns exist
 
 
-def test_each_map_layer_switches_off_on_its_own():
+def test_irregular_grid_has_uneven_cells():
+    even = C._grid(C.clean({**FLAT, "w": 8, "h": 6, "gn": 6, "gi": 0}), 8, 6)
+    odd = C._grid(C.clean({**FLAT, "w": 8, "h": 6, "gn": 6, "gi": 1}), 8, 6)
+    widths = lambda xs: [b - a for a, b in zip(xs, xs[1:])]
+    assert max(widths(even[0])) - min(widths(even[0])) < 1e-9 and len(even[0]) == 7
+    assert max(widths(odd[0])) / min(widths(odd[0])) > 1.5                             # visibly uneven
+    assert abs(odd[0][-1] - 8) < 1e-9 and abs(odd[1][-1] - 6) < 1e-9                  # still fills the canvas
+
+
+def test_preview_overlay_draws_the_grid_only_when_asked():
     store, specs, raw = two_sections()
-    pdf = C.migration_pdf({**raw, "scatter": 0.8, "rot": 40, "mp": "#ffffff"}, specs, store)
+    raw = {**raw, "pv": 400, "gs": 1, "gn": 4}
+    plain = Image.open(io.BytesIO(C.preview(raw, specs, store))).convert("RGB")
+    grid = Image.open(io.BytesIO(C.preview(raw, specs, store, show_grid=True))).convert("RGB")
+    def orange(im):
+        d = im.tobytes()
+        return sum(1 for i in range(0, len(d), 3) if d[i] > 200 and 60 < d[i + 1] < 130 and d[i + 2] < 100)
+    assert orange(plain) == 0 and orange(grid) > 200
+    out = C.export(raw, specs, store, "png")[0]                                        # exports never carry the overlay
+    assert orange(Image.open(io.BytesIO(out)).convert("RGB")) == 0
+
+
+def map_raw():
+    store, specs, raw = two_sections()
+    return store, specs, {**raw, "scatter": 0.8, "rot": 40, "m1p": "#ffffff", "m2c": "#ff0000", "m2o": 0.5, "m3a": 0.5, "m3p": "#00ff00"}
+
+
+def test_map_layers_have_their_own_tone_opacity_and_paper():
+    store, specs, raw = map_raw()
+    pdfs = C.migration_pdfs(raw, specs, store)
+    assert sorted(pdfs) == ["collage-1-initial.pdf", "collage-2-migration.pdf", "collage-3-final.pdf", "collage-map-layers.pdf"]
+    docs = {n: pymupdf.open(stream=d, filetype="pdf") for n, d in pdfs.items()}
+    for d in docs.values():
+        assert len(d) == 1 and d[0].rect == pymupdf.Rect(0, 0, 8 * 72, 6 * 72) and d[0].get_images() == []   # vector, canvas-sized
+    one, two, three = (docs[f"collage-{n}.pdf"][0].get_drawings() for n in ("1-initial", "2-migration", "3-final"))
+    assert one[0]["fill"] == (1.0, 1.0, 1.0) and one[0]["fill_opacity"] == 1                           # layer 1 paper: white, opaque
+    assert all(d["fill"] is None or d["fill"] == (1.0, 0.0, 0.0) for d in two)                         # layer 2 has no paper
+    assert two[0]["color"] == (1.0, 0.0, 0.0) and abs(two[0]["stroke_opacity"] - 0.5) < 1e-2            # tone + line opacity honoured
+    assert three[0]["fill"] == (0.0, 1.0, 0.0) and abs(three[0]["fill_opacity"] - 0.5) < 1e-2          # layer 3 paper: green, half opaque
+    assert len(two[0]["items"]) == 16 * 5                                                              # 4 corner lines + 1 path per section
+
+
+def test_map_shows_the_grid_and_strokes_that_steered_it():
+    store, specs, raw = map_raw()
+    plain = pymupdf.open(stream=C.migration_pdf(raw, specs, store), filetype="pdf")[0].get_drawings()
+    steered = pymupdf.open(stream=C.migration_pdf({**raw, "gs": 1, "gn": 4, "pts": [[0.1, 0.1], [0.9, 0.9]], "draw": 1}, specs, store), filetype="pdf")[0].get_drawings()
+    assert len(steered) == len(plain) + 2                                                             # a grid drawing and a stroke drawing
+
+
+def test_combined_map_layers_switch_off_on_their_own():
+    store, specs, raw = map_raw()
+    raw = {**raw, "m2a": 0, "m3a": 0}
+    pdf = C.migration_pdf(raw, specs, store)
+    doc = pymupdf.open(stream=pdf, filetype="pdf")
+    assert sorted(o["name"] for o in doc.get_ocgs().values()) == ["1 initial", "2 migration", "3 final"]
+    assert [x["layer"] for x in doc[0].get_drawings() if x.get("layer")][:2] == ["1 initial", "1 initial"]   # paper + outlines
 
     def inked(hide):
-        doc = pymupdf.open(stream=pdf, filetype="pdf")
-        for ui in doc.layer_ui_configs():
+        d = pymupdf.open(stream=pdf, filetype="pdf")
+        for ui in d.layer_ui_configs():
             if ui["text"] in hide:
-                doc.set_layer_ui_config(ui["number"], 2)                                # 2 = off
-        s = doc[0].get_pixmap(dpi=30, alpha=False).samples
-        return sum(1 for i in range(0, len(s), 3) if s[i:i + 3] != b"\xff\xff\xff")
+                d.set_layer_ui_config(ui["number"], 2)                                  # 2 = off
+        px = d[0].get_pixmap(dpi=30, alpha=False).samples
+        return sum(1 for i in range(0, len(px), 3) if px[i:i + 3] != b"\xff\xff\xff")
 
     base = inked(())
     assert all(inked((n,)) < base for n in ("1 initial", "2 migration", "3 final"))
-    assert inked(("1 initial", "2 migration", "3 final")) == 0                          # only white paper left
+    assert inked(("1 initial", "2 migration", "3 final")) == 0
+    im = Image.open(io.BytesIO(C.preview({**raw, "pv": 400}, specs, store, as_map=True)))
+    assert im.size[0] == 400                                                            # the stage can show it
 
 
 def test_portion_linework_and_zip():
@@ -254,7 +301,10 @@ def test_portion_linework_and_zip():
     assert sum(1 for d in pdf[0].get_drawings() if d.get("width") == 1.5) == 3         # one heavy outline per portion
     data, name = C.export(raw, specs, store, "png", lines=True)
     assert name == "collage.zip" and sorted(zipfile.ZipFile(io.BytesIO(data)).namelist()) == ["collage-portions.pdf", "collage.png"]
-    assert C.export(raw, specs, store, "map")[1] == "collage-map.pdf"
+    data, name = C.export(raw, specs, store, "map")
+    assert name == "collage-map.zip" and len(zipfile.ZipFile(io.BytesIO(data)).namelist()) == 4
+    data, name = C.export(raw, specs, store, "map", lines=True)
+    assert len(zipfile.ZipFile(io.BytesIO(data)).namelist()) == 5                       # + portion linework
     try:
         C.export({**raw, "ps": 1}, specs, store, "png", lines=True)
     except ValueError as e:

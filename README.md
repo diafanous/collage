@@ -26,15 +26,15 @@ Python 3.10+, two dependencies (Pillow, PyMuPDF). Everything runs locally; the s
    | layers | how many times the sections are laid down, each on top of the last |
    | opacity | per-section transparency |
    | edge blur | feathers each section's edge into the paper |
-   | grid pull / size / irregularity | sections are drawn to the nearest node of a guide grid; irregularity shakes the nodes off the regular lattice |
-   | drawing pull | click *draw on preview* and sketch: sections drift toward your lines |
+   | grid pull / size / irregularity | the **▦ grid** button on the preview shows a guide grid (moving any of these sliders turns it on). Each section settles in its own cell, a dot marks the landing spot; irregularity makes columns and rows uneven |
+   | drawing pull | press **✎ draw** on the preview and sketch: sections drift toward your lines (clear erases them) |
    | seed / paper | reroll the randomness / canvas colour |
 
    Double-click a slider to reset it. With scatter, variance and rotation at 0 and one layer, the output is the source, rebuilt exactly.
 4. **Tone.** Contrast, black/white point and gamma, then a tone curve (click the curve to add a point, drag to move it, double-click to remove). Applied to the sources, so preview and export match.
 5. **Output.** Size (in / cm / mm), dpi, and `png` (lossless), `tif` (lossless, Deflate) or `pdf` (page of the exact physical size holding the full-resolution image, lossless). Output is capped at 400 MP.
 
-   - **`map`** exports only the *migration map*: one vector PDF the size of the canvas with four layers you can switch on and off in a PDF viewer. *1 initial*: every section's outline where it was cut. *2 migration*: lines joining each section's corners to its new corners (so move, turn and scale read at once) and an arrow along each centre's path. *3 final*: where each section landed. Each layer has its own tone (colour) and opacity, plus the paper colour; choosing `map` shows it on the stage while you adjust.
+   - **`map`** exports the *migration map* as a zip of vector PDFs, each the size of the canvas: `collage-1-initial.pdf` (every section's outline where it was cut), `collage-2-migration.pdf` (lines joining each section's old corners to its new ones, so move, turn and scale read at once, plus an arrow along each centre's path; the guide grid and your drawing appear faintly when they steered), `collage-3-final.pdf` (where each section landed), and `collage-map-layers.pdf` with the three as PDF layers. Print or plot the three separate files and stack them. Each layer has its own tone, line opacity, paper colour and paper opacity (0 = no paper, so layers can overlay). Choosing `map` shows the stack on the stage while you adjust. Not every PDF viewer lets you toggle layers (browsers don't); the separate files always work.
    - **also save portion linework** (when *portion of each file* is below 100%) adds a vector PDF, one page per source at its physical size, outlining the selected portions with their numbers and the cut grid inside. With it ticked the download is a zip of the main output and `collage-portions.pdf`.
 
 The preview is rendered by the same engine as the export, at screen size. Sliders drag at half resolution and sharpen on release. Layout is in inches, so the export matches the preview at any dpi.
