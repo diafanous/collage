@@ -4,6 +4,7 @@ import json
 import pathlib
 import struct
 import tempfile
+import threading
 import zipfile
 
 import pymupdf
@@ -336,6 +337,24 @@ def test_random_folder_pick():
             assert "no images" in str(e)
         else:
             raise AssertionError("empty folder")
+
+
+def test_a_busy_port_is_never_shared():
+    a = server.Server(("127.0.0.1", 0), server.Handler)
+    port = a.server_address[1]
+    threading.Thread(target=a.serve_forever, daemon=True).start()
+    try:
+        assert server.running(port) == server.STAMP                      # a copy of this code is recognised and reused
+        try:
+            server.Server(("127.0.0.1", port), server.Handler)           # Windows would silently share the port otherwise
+        except OSError:
+            pass
+        else:
+            raise AssertionError("a second server bound the same port")
+    finally:
+        a.shutdown()
+        a.server_close()
+    assert server.running(port) is None                                  # nothing answers once it has stopped
 
 
 if __name__ == "__main__":

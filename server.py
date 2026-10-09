@@ -1,9 +1,11 @@
 """py server.py [port]  ->  opens the UI at http://127.0.0.1:8765"""
 import json
+import os
 import random
 import sys
 import threading
 import time
+import urllib.request
 import uuid
 import webbrowser
 import zipfile
@@ -16,6 +18,8 @@ import collage
 
 ROOT = Path(__file__).parent
 STORE = {}   # id -> collage.Source, for this session only
+# Changes when the code does. A server still running older code reports a different one, so a new launch won't reuse it.
+STAMP = str(max((ROOT / f).stat().st_mtime_ns for f in ("collage.py", "server.py")))
 EXT = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp", ".bmp", ".gif", ".pdf"}
 
 
@@ -81,7 +85,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         def go():
-            if self.path == "/":
+            if self.path == "/version":
+                self.reply(200, STAMP.encode(), "text/plain")
+            elif self.path == "/":
                 self.reply(200, (ROOT / "index.html").read_bytes(), "text/html; charset=utf-8")
             elif self.path.startswith("/font/") and self.path.endswith(".woff2") and self.path[6:-6] in ("Light", "Regular", "Medium"):
                 f = font(self.path[6:-6])
@@ -123,9 +129,35 @@ class Handler(BaseHTTPRequestHandler):
         self.guarded(go)
 
 
+class Server(ThreadingHTTPServer):
+    # On Windows SO_REUSEADDR lets a second process bind a port that is already in use, so two servers (one maybe
+    # running old code) would share it and the browser would reach either. Refuse instead.
+    allow_reuse_address = os.name != "nt"
+
+
+def running(port):
+    """The STAMP of a collage server already on this port, else None."""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/version", timeout=1) as r:
+            return r.read().decode()
+    except OSError:
+        return None
+
+
 if __name__ == "__main__":
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    print(f"collage  http://127.0.0.1:{port}  (ctrl+c to quit)")
+    first = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
+    for port in range(first, first + 10):
+        if running(port) == STAMP:   # this exact code is already serving: just show it
+            print(f"collage is already running at http://127.0.0.1:{port}")
+            webbrowser.open(f"http://127.0.0.1:{port}")
+            sys.exit()
+        try:
+            server = Server(("127.0.0.1", port), Handler)
+            break
+        except OSError:   # busy: another program, or collage still running older code
+            continue
+    else:
+        sys.exit(f"ports {first}-{first + 9} are all busy")
+    print(f"collage  http://127.0.0.1:{port}  (close this window to quit)")
     threading.Timer(0.4, webbrowser.open, [f"http://127.0.0.1:{port}"]).start()
     server.serve_forever()
